@@ -512,7 +512,10 @@
     (for-each
      (lambda (p)
        (define name (file-name p))
-       (unless (hashset-contains? *canopy-ignore-set* name)
+       ;; search respects the same visibility toggles as the tree
+       (unless (or (hashset-contains? *canopy-ignore-set* name)
+                   (and (not *canopy-show-hidden*) (starts-with? name "."))
+                   (and (not *canopy-show-git-ignored*) (canopy-git-ignored? p)))
          (if (is-dir? p)
              (walk p)
              (set! acc (cons p acc)))))
@@ -619,13 +622,28 @@
   (set! *canopy-cursor* 0)
   (set! *canopy-window-start* 0))
 
+(define *canopy-presearch-cursor* 0)
+(define *canopy-presearch-window* 0)
+
 ;; / starts a new query  and letters stay free for single-key commands
 (define (canopy-enter-search!)
+  ;; remember where browsing left off, so escape can put the tree back
+  (unless (canopy-searching?)
+    (set! *canopy-presearch-cursor* *canopy-cursor*)
+    (set! *canopy-presearch-window* *canopy-window-start*))
   (set! *canopy-typing?* #t)
   (set! *canopy-query* "")
   (canopy-refresh-search!)
   (set! *canopy-cursor* 0)
   (set! *canopy-window-start* 0))
+
+;; drops the query and restores the tree to its pre-search position
+(define (canopy-search-restore!)
+  (set! *canopy-typing?* #f)
+  (set! *canopy-query* "")
+  (canopy-refresh-search!)
+  (set! *canopy-cursor* (min *canopy-presearch-cursor* (max 0 (- (length *canopy-tree*) 1))))
+  (set! *canopy-window-start* *canopy-presearch-window*))
 
 (define (canopy-clear-search!)
   (set! *canopy-query* "")
@@ -692,6 +710,9 @@
         (canopy-info (string-append "canopy: " (file-name path) " is a binary file, not opening"))
         event-result/consume]
        [else
+        ;; opening from a search commits it: clear the query and reveal the
+        ;; opened file in the restored tree
+        (define from-search? (canopy-searching?))
         ;; hand focus to the buffer about to open
         (set! *canopy-focused* #f)
         (enqueue-thread-local-callback
@@ -699,7 +720,10 @@
            (cond
              [(equal? split 'horizontal) (helix.hsplit path)]
              [(equal? split 'vertical) (helix.vsplit path)]
-             [else (helix.open path)])))
+             [else (helix.open path)])
+           (when from-search?
+             (canopy-search-restore!)
+             (canopy-reveal-current-file!))))
         event-result/close])]
     [else event-result/consume]))
 
@@ -1481,9 +1505,8 @@
      (set! *canopy-typing?* #f)
      event-result/consume]
     [(key-event-escape? event)
-     ;; leaves the filtered results in place
-     ;; stops updating the query
-     (set! *canopy-typing?* #f)
+     ;; abandons the search: clear the query and restore the pre-search tree
+     (canopy-search-restore!)
      event-result/consume]
     [(key-event-backspace? event)
      (canopy-backspace!)
@@ -1531,8 +1554,10 @@
      event-result/consume]
 
     [(key-event-escape? event)
-     (canopy-switch-to-editor!)
-     event-result/close] ; pops fg only; bg stays visible
+     ;; first escape leaves an active search, second leaves the tree
+     (if (canopy-searching?)
+         (begin (canopy-search-restore!) event-result/consume)
+         (begin (canopy-switch-to-editor!) event-result/close))] ; close pops fg only; bg stays visible
 
     [(key-event-backspace? event)
      (canopy-clear-search!)
