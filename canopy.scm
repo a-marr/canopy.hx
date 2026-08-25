@@ -17,6 +17,12 @@
 (define *canopy-min-width* 16)
 (define *canopy-max-width* 60)
 (define *canopy-search-height* 3)
+;; the search box only takes rows while a query is active; the tree owns the
+;; full panel at rest
+(define (canopy-search-height-now)
+  (if (or *canopy-typing?* (canopy-searching?)) *canopy-search-height* 0))
+(define *canopy-auto-reveal* #t) ; follow the focused buffer in the tree
+(define *canopy-last-active-path* #f)
 (define *canopy-side* 'left) ; left or right set with canopy-configure!
 (define *canopy-linear-nav?* #t) ; linear vim-style movement through the whole visible tree (set #f for sibling-wrap)
 (define *canopy-show-separator?* #t)
@@ -186,11 +192,13 @@
 (define (canopy-configure! side
                             #:ignore [ignore (list )]
                             #:separator? [separator? #t]
-                            #:linear-nav [linear-nav #t])
+                            #:linear-nav [linear-nav #t]
+                            #:auto-reveal [auto-reveal #t])
   (set! *canopy-side* side)
   (set! *canopy-ignore-set* (apply hashset ignore))
   (set! *canopy-show-separator?* separator?)
-  (set! *canopy-linear-nav?* linear-nav))
+  (set! *canopy-linear-nav?* linear-nav)
+  (set! *canopy-auto-reveal* auto-reveal))
 
 (define (canopy-set-linear-nav! on?)
   (set! *canopy-linear-nav?* on?))
@@ -300,13 +308,18 @@
 ;; snaks keybinds
 (define (canopy-snacks-help-rows)
   (list
-    (list (string-append (canopy-help-key 'down) " / " (canopy-help-key 'up) " / ↑ / ↓") "Navigate in folder")
-    (list (string-append (canopy-help-key 'enter) " / →") "Enter dir or open file")
-    (list (string-append (canopy-help-key 'back) " / ←") "Leave folder")
-    (list "Enter / Tab" "Toggle directory")
+    (list (string-append (canopy-help-key 'down) " / " (canopy-help-key 'up) " / ↑ / ↓") "Move through the tree")
+    (list "gg / G" "Top / bottom")
+    (list "C-d / C-u" "Half page down / up")
+    (list (string-append (canopy-help-key 'enter) " / →") "Expand dir or open file")
+    (list (string-append (canopy-help-key 'back) " / ←") "Collapse dir, else parent")
+    (list "Enter / Tab" "Open file / toggle dir")
+    (list "C-s / C-v" "Open in split")
    (list (canopy-help-key 'search) "Fuzzy search")
+   (list (canopy-help-key 'reveal) "Reveal current file")
    (list (canopy-help-key 'create) "Create file or dir")
    (list (canopy-help-key 'rename) "Rename entry")
+   (list (canopy-help-key 'move) "Move entry")
    (list (canopy-help-key 'delete) "Delete entry")
    (list (canopy-help-key 'refresh) "Refresh tree")
    (list (canopy-help-key 'toggle-hidden) "Toggle dotfiles")
@@ -424,6 +437,15 @@
 
 (define (canopy-git-status path)
   (hash-try-get *canopy-git-status-map* (canopy-relpath path)))
+
+;; a directory is marked when any changed file lives underneath it
+(define (canopy-dir-has-changes? path)
+  (define rel (string-append (canopy-relpath path) "/"))
+  (let loop ([ks (hash-keys->list *canopy-git-status-map*)])
+    (cond
+      [(null? ks) #f]
+      [(starts-with? (car ks) rel) #t]
+      [else (loop (cdr ks))])))
 
 (define (canopy-searching?) (not (equal? *canopy-query* "")))
 
@@ -1234,15 +1256,16 @@
     ;; browse mode scrolls independently of the cursor and needs no pinning
     (when (canopy-searching?) (set! *canopy-click-window* *canopy-hit-window*))))
 
+;; single click acts: a folder toggles, a file opens
 (define (canopy-mouse-select! slot)
+  (define cursor (canopy-hit-cursor-for slot))
   (cond
-    [(equal? slot *canopy-click-slot*)
-     ;; toggling reshuffles the tree, so the armed row stops meaning the same entry
+    [cursor
+     (set! *canopy-cursor* cursor)
+     ;; no arming: the row acted immediately, and toggling reshuffles the tree
      (canopy-forget-click!)
      (canopy-activate!)]
-    [else
-     (canopy-select-clicked! slot)
-     event-result/consume]))
+    [else event-result/consume]))
 
 ;; cursor-up!/down! handle the window, so a notch is just repeated steps
 ;; a short list doesn't shift under the pointer, so the arm goes with it
@@ -1269,7 +1292,16 @@
   ;; one blank row above the search box
   (define y0 (canopy-snacks-y0))
   (define panel-h (max 1 (- h y0)))
-  (set! *canopy-visible-height* (max 1 (- panel-h *canopy-search-height*)))
+  (set! *canopy-visible-height* (max 1 (- panel-h (canopy-search-height-now))))
+  ;; follow the focused buffer: reveal it whenever it changes while the tree
+  ;; itself is not being driven
+  (when (and *canopy-auto-reveal* *canopy-active* (not *canopy-focused*)
+             (not (canopy-searching?)))
+    (define active (with-handler (lambda (_) #f)
+                     (editor-document->path (editor->doc-id (editor-focus)))))
+    (when (and (string? active) (not (equal? active *canopy-last-active-path*)))
+      (set! *canopy-last-active-path* active)
+      (enqueue-thread-local-callback canopy-reveal-current-file!)))
   (if *canopy-active*
       (begin
         (if (equal? *canopy-side* 'right)
@@ -1306,30 +1338,32 @@
   (define box-x (if left-divider? (+ x0 1) x0))
   (define box-w (if left-divider? (- w 3) w))
 
-  (define search-area (area box-x y0 box-w *canopy-search-height*))
-  ;; outline color marks focus
-  (define search-line (canopy-search-color))
-  (define search-border-style
-    (if search-line
-        (style-fg bg-style search-line)
-        (canopy-with-panel-bg (theme-scope-ref "ui.text"))))
-  (block/render frame search-area (make-block bg-style search-border-style "all" "rounded"))
+  (define search-h (canopy-search-height-now))
+  (define search-area (area box-x y0 box-w search-h))
+  (when (> search-h 0)
+    ;; outline color marks focus
+    (define search-line (canopy-search-color))
+    (define search-border-style
+      (if search-line
+          (style-fg bg-style search-line)
+          (canopy-with-panel-bg (theme-scope-ref "ui.text"))))
+    (block/render frame search-area (make-block bg-style search-border-style "all" "rounded"))
 
-  (define title "Explorer")
-  (when (> box-w (+ (string-length title) 4))
-    (frame-set-string! frame (+ box-x (quotient (- box-w (string-length title)) 2)) y0
-                        title title-style))
+    (define title "Explorer")
+    (when (> box-w (+ (string-length title) 4))
+      (frame-set-string! frame (+ box-x (quotient (- box-w (string-length title)) 2)) y0
+                          title title-style))
 
-  (define prompt (string-append *canopy-query-prefix* *canopy-query*))
-  (define prompt-shown (canopy-truncate prompt (- box-w 2)))
-  (frame-set-string! frame (+ box-x 1) (+ y0 1) prompt-shown text-style)
+    (define prompt (string-append *canopy-query-prefix* *canopy-query*))
+    (define prompt-shown (canopy-truncate prompt (- box-w 2)))
+    (frame-set-string! frame (+ box-x 1) (+ y0 1) prompt-shown text-style)
 
-  (when (canopy-searching?)
-    (define counter (string-append (number->string (length *canopy-search-results*))
-                                    "/" (number->string (length *canopy-all-files*))))
-    (define counter-x (- (+ box-x box-w) 1 (string-length counter)))
-    (when (>= counter-x (+ box-x 2 (string-length prompt-shown)))
-      (frame-set-string! frame counter-x (+ y0 1) counter dim-style)))
+    (when (canopy-searching?)
+      (define counter (string-append (number->string (length *canopy-search-results*))
+                                      "/" (number->string (length *canopy-all-files*))))
+      (define counter-x (- (+ box-x box-w) 1 (string-length counter)))
+      (when (>= counter-x (+ box-x 2 (string-length prompt-shown)))
+        (frame-set-string! frame counter-x (+ y0 1) counter dim-style))))
 
   (when *canopy-show-separator?*
     (define sep-x (if (equal? *canopy-side* 'right) (- x0 1) (- (+ x0 w) 1)))
@@ -1341,7 +1375,7 @@
           (frame-set-string! frame sep-x y "│" border-style)
           (loop (+ y 1))))))
 
-  (define list-y0 (+ y0 *canopy-search-height*))
+  (define list-y0 (+ y0 search-h))
   (define max-text-w (- list-w 1))
 
   (set! *canopy-hit-panel* panel-area)
@@ -1419,7 +1453,10 @@
             (define dir? (is-dir? path))
             (define icon (if dir? (glyph-dir-icon name) (glyph-icon name)))
             (define icon-color (if dir? (glyph-dir-color name) (glyph-color name)))
-            (define git-status (and (not dir?) (canopy-git-status path)))
+            (define git-status
+              (if dir?
+                  (and (canopy-dir-has-changes? path) 'modified)
+                  (canopy-git-status path)))
             (define git-icon (if git-status (glyph-git-icon git-status) " "))
             (define git-color (if git-status (glyph-git-color git-status) #f))
             (define y (+ list-y0 row))
@@ -1428,17 +1465,16 @@
             (define prefix-w (string-length prefix))
             (define icon-w (string-length icon))
             (define git-x (+ x0 prefix-w icon-w 1))
-            (define git-w (if dir? 0 1))
-            (define gap (if dir? 0 1))
+            (define git-w 1)
+            (define gap 1)
             (define name-x (+ git-x git-w gap))
             (define avail (max 0 (- max-text-w prefix-w icon-w 1 git-w gap)))
             (when hl?
               (frame-set-string! frame x0 y (make-string list-w #\space) hl-style))
             (frame-set-string! frame x0 y prefix row-style)
             (frame-set-string! frame (+ x0 prefix-w) y icon (glyph-style icon-color #:base row-style))
-            (unless dir?
-              (frame-set-string! frame git-x y git-icon
-                                  (if git-color (glyph-style git-color #:base row-style) row-style)))
+            (frame-set-string! frame git-x y git-icon
+                                (if git-color (glyph-style git-color #:base row-style) row-style))
             (frame-set-string! frame name-x y (canopy-truncate name avail) row-style)
             (loop (cdr items) (+ row 1)))))))
 
