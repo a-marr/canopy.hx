@@ -21,14 +21,20 @@ Status: v0 in active development. See SPEC in the parent project.
 | `Enter` | open file / toggle dir |
 | `Ctrl-s` / `Ctrl-v` | open in horizontal / vertical split |
 | `f` | reveal current buffer's file (expand ancestors) |
-| `n` / `N` | new file / rename-as-move |
+| `n` / `N` | new file / new directory |
 | `r` / `m` | rename / move |
-| `d` | delete (confirms) |
-| `/` | filter search |
+| `y` / `p` | yank entry / paste a copy |
+| `Y` | copy absolute path to clipboard |
+| `d` | delete (confirms; trash when available) |
+| `/` | filter search (box appears only while active) |
 | `.` / `i` | toggle dotfiles / git-ignored |
 | `R` | refresh |
 | `+` / `-` | resize |
 | `Esc`, any ctrl/alt chord | focus editor |
+
+Git status badges mark changed files and propagate to their parent
+directories. The tree follows the focused buffer (`#:auto-reveal`).
+File icons come from devicons.hx (nvim-tree catalog).
 
 Known-binary files are refused with a status message instead of opening as
 raw bytes.

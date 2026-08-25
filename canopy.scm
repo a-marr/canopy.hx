@@ -6,6 +6,25 @@
 (require (prefix-in helix. "helix/commands.scm"))
 (require "notify/notify.scm")
 (require "glyph/glyph.scm")
+(require "devicons/devicons.scm")
+
+;; file icons come from devicons (nvim-tree catalog, the grove look);
+;; directories and git badges stay on glyph
+(define (canopy-hex2 n)
+  (define s (number->string n 16))
+  (if (< (string-length s) 2) (string-append "0" s) s))
+
+(define (canopy-file-icon name)
+  (define ic (get_icon name))
+  (if ic (icon-glyph ic) (glyph-icon name)))
+
+(define (canopy-file-color name)
+  (define ic (get_icon name))
+  (if ic
+      (string-append "#" (canopy-hex2 (icon-red ic))
+                     (canopy-hex2 (icon-green ic))
+                     (canopy-hex2 (icon-blue ic)))
+      (glyph-color name)))
 
 (define (canopy-info msg)
   (notify msg #:title "canopy.hx"))
@@ -1126,7 +1145,7 @@
 
 (define (canopy-snacks-y0) 1)
 
-(define *canopy-query-prefix* "> ")
+(define *canopy-query-prefix* "/ ")
 
 (define (canopy-match-positions name query)
   (let loop ([ns (string->list (string-downcase name))]
@@ -1405,21 +1424,23 @@
           (canopy-with-panel-bg (theme-scope-ref "ui.text"))))
     (block/render frame search-area (make-block bg-style search-border-style "all" "rounded"))
 
-    (define title "Explorer")
-    (when (> box-w (+ (string-length title) 4))
-      (frame-set-string! frame (+ box-x (quotient (- box-w (string-length title)) 2)) y0
-                          title title-style))
+    ;; a small search glyph sits in the top border; the counter cuts into its
+    ;; right corner, so the input row stays clean for the query alone
+    (when (> box-w 6)
+      (frame-set-string! frame (+ box-x 2) y0 " 󰍉 " title-style))
 
-    (define prompt (string-append *canopy-query-prefix* *canopy-query*))
-    (define prompt-shown (canopy-truncate prompt (- box-w 2)))
-    (frame-set-string! frame (+ box-x 1) (+ y0 1) prompt-shown text-style)
+    (frame-set-string! frame (+ box-x 1) (+ y0 1) *canopy-query-prefix* title-style)
+    (define query-shown
+      (canopy-truncate *canopy-query* (- box-w 2 (string-length *canopy-query-prefix*))))
+    (frame-set-string! frame (+ box-x 1 (string-length *canopy-query-prefix*)) (+ y0 1)
+                        query-shown text-style)
 
     (when (canopy-searching?)
-      (define counter (string-append (number->string (length *canopy-search-results*))
-                                      "/" (number->string (length *canopy-all-files*))))
-      (define counter-x (- (+ box-x box-w) 1 (string-length counter)))
-      (when (>= counter-x (+ box-x 2 (string-length prompt-shown)))
-        (frame-set-string! frame counter-x (+ y0 1) counter dim-style))))
+      (define counter (string-append " " (number->string (length *canopy-search-results*))
+                                      "/" (number->string (length *canopy-all-files*)) " "))
+      (define counter-x (- (+ box-x box-w) 2 (string-length counter)))
+      (when (> counter-x (+ box-x 6))
+        (frame-set-string! frame counter-x y0 counter dim-style))))
 
   (when *canopy-show-separator?*
     (define sep-x (if (equal? *canopy-side* 'right) (- x0 1) (- (+ x0 w) 1)))
@@ -1465,8 +1486,8 @@
                 (define dir? (list-ref entry 1))
                 (define name (list-ref entry 2))
                 (define rel (list-ref entry 3))
-                (define icon (if dir? (glyph-dir-icon name) (glyph-icon name)))
-                (define icon-color (if dir? (glyph-dir-color name) (glyph-color name)))
+                (define icon (if dir? (glyph-dir-icon name) (canopy-file-icon name)))
+                (define icon-color (if dir? (glyph-dir-color name) (canopy-file-color name)))
                 (define git-status (and (not dir?) (canopy-git-status rel)))
                 (define git-icon (if git-status (glyph-git-icon git-status) " "))
                 (define git-color (if git-status (glyph-git-color git-status) #f))
@@ -1507,8 +1528,8 @@
             (define name (list-ref entry 3))
             (define prefix (string-append indent marker))
             (define dir? (is-dir? path))
-            (define icon (if dir? (glyph-dir-icon name) (glyph-icon name)))
-            (define icon-color (if dir? (glyph-dir-color name) (glyph-color name)))
+            (define icon (if dir? (glyph-dir-icon name) (canopy-file-icon name)))
+            (define icon-color (if dir? (glyph-dir-color name) (canopy-file-color name)))
             (define git-status
               (if dir?
                   (and (canopy-dir-has-changes? path) 'modified)
@@ -2113,8 +2134,8 @@
           (define idx (+ ws row))
           (define dir? (is-dir? (car e)))
           (define hl? (and active? (= idx cursor)))
-          (define icon (if dir? (glyph-dir-icon (cdr e)) (glyph-icon (cdr e))))
-          (define icon-color (if dir? (glyph-dir-color (cdr e)) (glyph-color (cdr e))))
+          (define icon (if dir? (glyph-dir-icon (cdr e)) (canopy-file-icon (cdr e))))
+          (define icon-color (if dir? (glyph-dir-color (cdr e)) (canopy-file-color (cdr e))))
           (define git-status (and (not dir?) (canopy-git-status (car e))))
           (define git-icon (if git-status (glyph-git-icon git-status) " "))
           (define git-color (if git-status (glyph-git-color git-status) #f))
