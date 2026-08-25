@@ -21,6 +21,9 @@ Status: v0 in active development. See SPEC in the parent project.
 | `Enter` | open file / toggle dir |
 | `Ctrl-s` / `Ctrl-v` | open in horizontal / vertical split |
 | `f` | reveal current buffer's file (expand ancestors) |
+| `>` / `<` | dive into dir as new root / climb out |
+| `P` | toggle file preview popup |
+| `?` or `Space` | help popup |
 | `n` / `N` | new file / new directory |
 | `r` / `m` | rename / move |
 | `y` / `p` | yank entry / paste a copy |
@@ -33,8 +36,12 @@ Status: v0 in active development. See SPEC in the parent project.
 | `Esc`, any ctrl/alt chord | focus editor |
 
 Git status badges mark changed files and propagate to their parent
-directories. The tree follows the focused buffer (`#:auto-reveal`).
-File icons come from devicons.hx (nvim-tree catalog).
+directories; badges match paths against the repo root, so they survive
+root dives. The tree follows the focused buffer (`#:auto-reveal`).
+Renaming or moving a file whose buffer is open and clean re-paths the
+buffer; a dirty buffer gets a warning instead. Expanded directories
+persist per root under `~/.local/state/canopy/`. File icons come from
+devicons.hx (nvim-tree catalog).
 
 Known-binary files are refused with a status message instead of opening as
 raw bytes.

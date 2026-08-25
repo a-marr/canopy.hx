@@ -106,8 +106,26 @@
                     (let ([sym (canopy-git-status-symbol code)])
                       (loop (cdr ls) ign (if sym (hash-insert statuses path sym) statuses))))))))))
 
+;; porcelain paths are relative to the REPO root, which can differ from the
+;; tree root after a root dive; matching must strip the repo-root prefix
+(define *canopy-git-toplevel* #f)
+
+(define (canopy-scan-git-toplevel! root)
+  (set! *canopy-git-toplevel*
+        (with-handler
+          (lambda (_) #f)
+          (let ([proc (~> (command "git" (list "-C" root "rev-parse" "--show-toplevel"))
+                          with-stdout-piped
+                          with-stderr-piped
+                          spawn-process)])
+            (if (Ok? proc)
+                (let ([out (trim (read-port-to-string (child-stdout (Ok->value proc))))])
+                  (if (> (string-length out) 0) out #f))
+                #f)))))
+
 ;; recomputes which workspace-relative paths git considers ignored
 (define (canopy-scan-git-ignored! root)
+  (canopy-scan-git-toplevel! root)
   (define parsed
     (with-handler
       (lambda (_) (cons (hashset) (hash)))
@@ -156,6 +174,9 @@
         'yank "y"
         'paste "p"
         'copy-path "Y"
+        'root-dive ">"
+        'root-up "<"
+        'preview "P"
         'wider "+"
         'narrower "-"
         'menu " " ; space key
@@ -340,6 +361,8 @@
     (list (string-append (canopy-help-key 'back) " / ←") "Collapse dir, else parent")
     (list "Enter / Tab" "Open file / toggle dir")
     (list "C-s / C-v" "Open in split")
+    (list "> / <" "Dive into dir as root / climb out")
+    (list (canopy-help-key 'preview) "Toggle preview popup")
    (list (canopy-help-key 'search) "Fuzzy search")
    (list (canopy-help-key 'reveal) "Reveal current file")
    (list (canopy-help-key 'create) "Create file or dir")
@@ -453,21 +476,29 @@
 
 ;; strips the workspace prefix so prompts show a short path instead of the full one
 (define (canopy-relpath path)
-  (define prefix (string-append (helix-find-workspace) (path-separator)))
+  (define prefix (string-append (canopy-root) (path-separator)))
+  (if (and (>= (string-length path) (string-length prefix))
+           (equal? (substring path 0 (string-length prefix)) prefix))
+      (substring path (string-length prefix) (string-length path))
+      path))
+
+(define (canopy-git-relpath path)
+  (define top (or *canopy-git-toplevel* (canopy-root)))
+  (define prefix (string-append top (path-separator)))
   (if (and (>= (string-length path) (string-length prefix))
            (equal? (substring path 0 (string-length prefix)) prefix))
       (substring path (string-length prefix) (string-length path))
       path))
 
 (define (canopy-git-ignored? path)
-  (hashset-contains? *canopy-git-ignored-set* (canopy-relpath path)))
+  (hashset-contains? *canopy-git-ignored-set* (canopy-git-relpath path)))
 
 (define (canopy-git-status path)
-  (hash-try-get *canopy-git-status-map* (canopy-relpath path)))
+  (hash-try-get *canopy-git-status-map* (canopy-git-relpath path)))
 
 ;; a directory is marked when any changed file lives underneath it
 (define (canopy-dir-has-changes? path)
-  (define rel (string-append (canopy-relpath path) "/"))
+  (define rel (string-append (canopy-git-relpath path) "/"))
   (let loop ([ks (hash-keys->list *canopy-git-status-map*)])
     (cond
       [(null? ks) #f]
@@ -503,7 +534,7 @@
         (unless (hash-try-get *canopy-directories* path)
           (for-each (lambda (child) (walk child (+ depth 1)))
                     (canopy-sort-entries (read-dir path)))))))
-  (walk (helix-find-workspace) 0)
+  (walk (canopy-root) 0)
   (set! *canopy-tree* (reverse result)))
 
 (define (canopy-parent-path path)
@@ -515,7 +546,7 @@
 
 ;; marks every old dir between the workspace root and path as open
 (define (canopy-open-ancestors-for-file! path)
-  (define ws (helix-find-workspace))
+  (define ws (canopy-root))
   (define ws-prefix (string-append ws (path-separator)))
   (when (and (string? path)
              (>= (string-length path) (string-length ws-prefix))
@@ -548,13 +579,13 @@
     (canopy-seek-file! path))
   ;; workspace row is only a parent, start on its first child so j/k work immediately
   (let ([entry (canopy-current-entry)])
-    (when (and entry (equal? (car entry) (helix-find-workspace)))
+    (when (and entry (equal? (car entry) (canopy-root)))
       (canopy-enter-dir! (car entry)))))
 
 ;; flat recursive file list for search
 ;; searches files indepedent of the fold state
 (define (canopy-scan-files!)
-  (define root (helix-find-workspace))
+  (define root (canopy-root))
   (define root-prefix (string-append root (path-separator)))
   (define acc '())
   (define (walk dir)
@@ -649,7 +680,7 @@
   (if (canopy-searching?)
       (and (not (null? *canopy-search-results*))
            (let ([rel (list-ref *canopy-search-results* *canopy-cursor*)])
-             (cons (string-append (helix-find-workspace) (path-separator) rel) rel)))
+             (cons (string-append (canopy-root) (path-separator) rel) rel)))
       (and (not (null? *canopy-tree*))
            (list-ref *canopy-tree* *canopy-cursor*))))
 
@@ -703,6 +734,7 @@
 ;; refreshes the view after an eaction like deletion
 (define (canopy-refresh-all!)
   (define old *canopy-cursor*)
+  (canopy-scan-git-ignored! (canopy-root)) ; badges refresh with the tree
   (canopy-build-tree!)
   (canopy-scan-files!)
   (canopy-refresh-search!)
@@ -731,7 +763,8 @@
         (hash-insert *canopy-directories* path (not (hash-try-get *canopy-directories* path))))
   (define old *canopy-cursor*)
   (canopy-build-tree!)
-  (set! *canopy-cursor* (min old (max 0 (- (length *canopy-tree*) 1)))))
+  (set! *canopy-cursor* (min old (max 0 (- (length *canopy-tree*) 1))))
+  (canopy-save-state!))
 
 ;; helix renders binary files as raw bytes in the buffer; refuse the well-known ones
 (define *canopy-binary-extensions*
@@ -791,7 +824,7 @@
        (not (hash-try-get *canopy-directories* path))))
 
 (define (canopy-path-in-workspace? path)
-  (define ws (helix-find-workspace))
+  (define ws (canopy-root))
   (or (equal? path ws)
       (starts-with? path (string-append ws (path-separator)))))
 
@@ -826,7 +859,7 @@
   (define entry (canopy-current-entry))
   (when (and entry (not (canopy-searching?)))
     (define path (car entry))
-    (define ws (helix-find-workspace))
+    (define ws (canopy-root))
     (cond
       [(and (is-dir? path) (canopy-dir-expanded? path) (not (equal? path ws)))
        (canopy-toggle-dir! path)]
@@ -849,6 +882,7 @@
   (canopy-unfocus!))
 
 (define (canopy-close!)
+  (canopy-save-state!)
   (canopy-reset-mouse!)
   (canopy-help-dismiss!)
   (set! *canopy-active* #f)
@@ -1048,7 +1082,7 @@
         (string-append "New (end with " (path-separator) " for dir): ")
         (canopy-relpath base)
         (lambda (name)
-          (define full (string-append (helix-find-workspace) (path-separator) name))
+          (define full (string-append (canopy-root) (path-separator) name))
           (with-handler
             (lambda (err) (canopy-error (string-append "create failed: " (error-object-message err))))
             (begin
@@ -1079,8 +1113,24 @@
               (lambda (err) (canopy-error (string-append "rename failed: " (error-object-message err))))
               (begin
                 (canopy-run-mv! path (string-append dir (path-separator) new-name))
+                (canopy-repath-open-buffer! path (string-append dir (path-separator) new-name))
                 (canopy-info (string-append "renamed " name " -> " new-name))))
             (enqueue-thread-local-callback canopy-refresh-all!))))))))
+
+;; after a rename/move, swap any clean open buffer over to the new path; a
+;; dirty buffer is left alone (writing it would silently recreate the old path,
+;; so the user gets a warning instead)
+(define (canopy-repath-open-buffer! old-path new-path)
+  (with-handler
+    (lambda (_) void)
+    (let ([doc (findf (lambda (d) (equal? old-path (editor-document->path d)))
+                      (editor-all-documents))])
+      (when doc
+        (if (editor-document-dirty? doc)
+            (canopy-info "renamed file has unsaved buffer changes; save them to the new path manually")
+            (begin
+              (helix.open new-path)
+              (helix.buffer-close old-path)))))))
 
 ;; move: like rename but edits the workspace-relative path, so the entry can
 ;; change directory; missing target dirs are created
@@ -1097,12 +1147,13 @@
         rel
         (lambda (new-rel)
           (when (and (not (equal? new-rel "")) (not (equal? new-rel rel)))
-            (define full (string-append (helix-find-workspace) (path-separator) new-rel))
+            (define full (string-append (canopy-root) (path-separator) new-rel))
             (with-handler
               (lambda (err) (canopy-error (string-append "move failed: " (error-object-message err))))
               (begin
                 (canopy-run-mkdir-p! (canopy-parent-path full))
                 (canopy-run-mv! path full)
+                (canopy-repath-open-buffer! path full)
                 (canopy-info (string-append "moved " rel " -> " new-rel))))
             (enqueue-thread-local-callback canopy-refresh-all!))))))))
 
@@ -1598,6 +1649,78 @@
 
 (define (canopy-render-fg state rect frame) void) ; bg handles all drawing
 
+;; ---- file preview popup -----------------------------------------------------
+(define *canopy-preview?* #f)
+(define *canopy-preview-path* #f)
+(define *canopy-preview-lines* '())
+
+(define (canopy-preview-toggle!)
+  (set! *canopy-preview?* (not *canopy-preview?*))
+  (unless *canopy-preview?*
+    (set! *canopy-preview-path* #f)
+    (set! *canopy-preview-lines* '())))
+
+(define (canopy-preview-load! path)
+  (unless (equal? path *canopy-preview-path*)
+    (set! *canopy-preview-path* path)
+    (set! *canopy-preview-lines*
+          (cond
+            [(not path) '()]
+            [(is-dir? path)
+             (with-handler (lambda (_) (list "<unreadable>"))
+               (map (lambda (p) (string-append (if (is-dir? p) " " " ") (file-name p)))
+                    (sort (read-dir path) string<?)))]
+            [(canopy-binary-path? path) (list "<binary file>")]
+            [else
+             (with-handler
+               (lambda (_) (list "<unreadable>"))
+               (let ([proc (~> (command "head" (list "-n" "60" path))
+                               with-stdout-piped
+                               with-stderr-piped
+                               spawn-process)])
+                 (if (Ok? proc)
+                     (split-many (read-port-to-string (child-stdout (Ok->value proc))) "\n")
+                     (list "<unreadable>"))))]))))
+
+(define (canopy-preview-render! rect frame)
+  (when (and *canopy-active* *canopy-focused* *canopy-preview?*)
+    (define entry (canopy-current-entry))
+    (canopy-preview-load! (and entry (car entry)))
+    (when (and entry (not (null? *canopy-preview-lines*)))
+      (define panel-w (min *canopy-width* (area-width rect)))
+      (define right-side? (equal? *canopy-side* 'right))
+      (define avail-w (- (area-width rect) panel-w 2))
+      (define box-w (min 82 (max 20 avail-w)))
+      (define box-x (if right-side?
+                        (max 0 (- (area-width rect) panel-w box-w 1))
+                        (+ panel-w 1)))
+      (define box-h (min (+ 2 (length *canopy-preview-lines*))
+                         (max 5 (- (area-height rect) 4))))
+      (define box-y 1)
+      (when (> avail-w 20)
+        (define border (theme-scope-ref "ui.text"))
+        (define bgp (theme-scope-ref "ui.popup"))
+        (define box-area (area box-x box-y box-w box-h))
+        (buffer/clear-with frame box-area bgp)
+        (block/render frame box-area (make-block bgp border "all" "rounded"))
+        (frame-set-string! frame (+ box-x 2) box-y
+                            (string-append " " (canopy-truncate (file-name (car entry)) (- box-w 6)) " ")
+                            (style-with-bold border))
+        (let loop ([ls *canopy-preview-lines*] [row 1])
+          (cond
+            [(or (null? ls) (>= row (- box-h 1))) void]
+            [(and (= row (- box-h 2)) (> (length ls) 1))
+             ;; more content than rows: say so instead of cutting silently
+             (frame-set-string! frame (+ box-x 1) (+ box-y row) "…" (style-with-dim bgp))]
+            [else
+             (frame-set-string! frame (+ box-x 1) (+ box-y row)
+                                 (canopy-truncate (car ls) (- box-w 2)) bgp)
+             (loop (cdr ls) (+ row 1))]))))))
+
+(define (canopy-render-bg+preview state rect frame)
+  (canopy-render-bg state rect frame)
+  (canopy-preview-render! rect frame))
+
 ;; cursor only needs to appear while actively typing a search query
 (define (canopy-cursor-fn-fg state area)
   (if *canopy-typing?*
@@ -1666,6 +1789,82 @@
         (canopy-copy-to-clipboard! (car entry))
         (canopy-info (string-append "copied path " (car entry)))))))
 
+;; ---- tree root -------------------------------------------------------------
+;; the tree normally follows the helix workspace; C-] dives into a subdir as
+;; the new root and C-[ climbs back out
+(define *canopy-root-override* #f)
+
+(define (canopy-root)
+  (or *canopy-root-override* (helix-find-workspace)))
+
+(define (canopy-set-root! path)
+  (set! *canopy-root-override* path)
+  ;; the new root always shows expanded
+  (set! *canopy-directories* (hash-insert *canopy-directories* path #f))
+  (set! *canopy-cursor* 0)
+  (set! *canopy-window-start* 0)
+  (set! *canopy-query* "")
+  (set! *canopy-typing?* #f)
+  (canopy-load-state!)
+  (canopy-refresh-all!)
+  (canopy-info (string-append "root: " (canopy-root))))
+
+(define (canopy-root-dive!)
+  (define entry (canopy-current-entry))
+  (when (and entry (not (canopy-searching?)))
+    (define target (if (is-dir? (car entry)) (car entry) (canopy-parent-path (car entry))))
+    (when (and (string? target) (not (equal? target (canopy-root))))
+      (canopy-set-root! target))))
+
+(define (canopy-root-up!)
+  (define parent (canopy-parent-path (canopy-root)))
+  (when (and (string? parent) (> (string-length parent) 1) (not (equal? parent (canopy-root))))
+    (canopy-set-root! parent)))
+
+;; ---- session persistence ---------------------------------------------------
+;; expanded dirs survive restarts, one state file per root under
+;; $HOME/.local/state/canopy
+(define *canopy-state-loaded-root* #f)
+
+(define (canopy-state-path-sh)
+  (string-append "\"$HOME/.local/state/canopy/"
+                 (canopy-string-join (split-many (canopy-root) "/") "%") ".list\""))
+
+(define (canopy-expanded-relpaths)
+  (let loop ([ks (hash-keys->list *canopy-directories*)] [acc '()])
+    (cond
+      [(null? ks) acc]
+      [(canopy-dir-expanded? (car ks)) (loop (cdr ks) (cons (canopy-relpath (car ks)) acc))]
+      [else (loop (cdr ks) acc)])))
+
+(define (canopy-save-state!)
+  (with-handler
+    (lambda (_) void)
+    (canopy-run-sh!
+     (string-append "mkdir -p \"$HOME/.local/state/canopy\" && printf '%s' "
+                    (canopy-shell-single-quote (canopy-string-join (canopy-expanded-relpaths) "\n"))
+                    " > " (canopy-state-path-sh))
+     "state")))
+
+(define (canopy-load-state!)
+  (unless (equal? *canopy-state-loaded-root* (canopy-root))
+    (set! *canopy-state-loaded-root* (canopy-root))
+    (with-handler
+      (lambda (_) void)
+      (let ([proc (~> (command "sh" (list "-c" (string-append "cat " (canopy-state-path-sh) " 2>/dev/null")))
+                      with-stdout-piped
+                      with-stderr-piped
+                      spawn-process)])
+        (when (Ok? proc)
+          (let* ([out (read-port-to-string (child-stdout (Ok->value proc)))]
+                 [rels (filter (lambda (l) (> (string-length l) 0)) (split-many out "\n"))])
+            (for-each
+             (lambda (rel)
+               (define full (string-append (canopy-root) (path-separator) rel))
+               (when (is-dir? full)
+                 (set! *canopy-directories* (hash-insert *canopy-directories* full #f))))
+             rels)))))))
+
 (define (canopy-command-action! action)
   (cond
     [(equal? action 'down) (canopy-cursor-down!) event-result/consume]
@@ -1685,6 +1884,9 @@
     [(equal? action 'yank) (canopy-yank!) event-result/consume]
     [(equal? action 'paste) (canopy-paste!) event-result/consume]
     [(equal? action 'copy-path) (canopy-copy-path!) event-result/consume]
+    [(equal? action 'root-dive) (canopy-root-dive!) event-result/consume]
+    [(equal? action 'root-up) (canopy-root-up!) event-result/consume]
+    [(equal? action 'preview) (canopy-preview-toggle!) event-result/consume]
     [(equal? action 'toggle-hidden) (canopy-toggle-hidden!) event-result/consume]
     [(equal? action 'toggle-git-ignored) (canopy-toggle-git-ignored!) event-result/consume]
     [(equal? action 'wider) (canopy-wider!) event-result/consume]
@@ -1749,6 +1951,8 @@
          (set! *canopy-pending-g* #t))
      event-result/consume]
 
+    [(and (char? ch) (char=? ch #\?)) (canopy-command-action! 'menu)] ; help alias
+
     [(char? ch)
      (set! *canopy-pending-g* #f)
      (define action (canopy-action-for-char ch))
@@ -1806,7 +2010,7 @@
 (define (canopy-make-bg-component)
   (new-component! "canopy-bg"
                   (CanopyBgState)
-                  canopy-render-bg
+                  canopy-render-bg+preview
                   (hash "handle_event" canopy-handle-event-bg)))
 
 (define (canopy-make-fg-component)
@@ -1826,7 +2030,8 @@
      (set! *canopy-query* "")
      (set! *canopy-search-results* '())
      (set! *canopy-typing?* #f)
-     (canopy-scan-git-ignored! (helix-find-workspace))
+     (canopy-scan-git-ignored! (canopy-root))
+     (canopy-load-state!)
      (canopy-reveal-current-file!)
      (canopy-scan-files!)
      (push-component! (canopy-make-bg-component))
@@ -1837,7 +2042,7 @@
 
     [else
      (set! *canopy-focused* #t)
-     (canopy-scan-git-ignored! (helix-find-workspace))
+     (canopy-scan-git-ignored! (canopy-root))
      (canopy-reveal-current-file!)
      (push-component! (canopy-make-fg-component))]))
 
@@ -1963,7 +2168,7 @@
 
 ;; expands ancestors down to whatever file the editor has focused
 (define (canopy-mini-reveal-current-file!)
-  (define root (helix-find-workspace))
+  (define root (canopy-root))
   (define path (editor-document->path (editor->doc-id (editor-focus))))
   (if (string? path)
       (canopy-mini-build-stack-for root path)
@@ -2050,7 +2255,7 @@
       (string-append "New (end with " (path-separator) " for dir): ")
       (canopy-relpath base)
       (lambda (name)
-        (define full (string-append (helix-find-workspace) (path-separator) name))
+        (define full (string-append (canopy-root) (path-separator) name))
         (with-handler
           (lambda (err) (canopy-error (string-append "create failed: " (error-object-message err))))
           (begin
@@ -2081,6 +2286,7 @@
               (lambda (err) (canopy-error (string-append "rename failed: " (error-object-message err))))
               (begin
                 (canopy-run-mv! path (string-append dir (path-separator) new-name))
+                (canopy-repath-open-buffer! path (string-append dir (path-separator) new-name))
                 (canopy-info (string-append "renamed " name " -> " new-name))))
             (enqueue-thread-local-callback canopy-mini-refresh-active!))))))))
 
@@ -2107,7 +2313,7 @@
 
 ;; searches the whole workspace and re-cascades the stack to the match
 (define (canopy-mini-prompt-search!)
-  (define root (helix-find-workspace))
+  (define root (canopy-root))
   (enqueue-thread-local-callback
    (lambda ()
      (canopy-show-modal!
@@ -2432,7 +2638,7 @@
 (define (canopy-mini-open!)
   (cond
     [(not *canopy-active*)
-     (canopy-scan-git-ignored! (helix-find-workspace))
+     (canopy-scan-git-ignored! (canopy-root))
      (set! *canopy-mini-stack* (canopy-mini-reveal-current-file!))
      (set! *canopy-active* #t)
      (push-component! (canopy-mini-make-component))]
