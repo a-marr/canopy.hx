@@ -22,6 +22,7 @@
 (define (canopy-search-height-now)
   (if (or *canopy-typing?* (canopy-searching?)) *canopy-search-height* 0))
 (define *canopy-auto-reveal* #t) ; follow the focused buffer in the tree
+(define *canopy-use-trash* 'auto) ; 'auto tries trash/trash-put/gio before rm; 'never deletes directly
 (define *canopy-last-active-path* #f)
 (define *canopy-side* 'left) ; left or right set with canopy-configure!
 (define *canopy-linear-nav?* #t) ; linear vim-style movement through the whole visible tree (set #f for sibling-wrap)
@@ -133,6 +134,9 @@
         'bottom "G"
         'move "m"
         'reveal "f"
+        'yank "y"
+        'paste "p"
+        'copy-path "Y"
         'wider "+"
         'narrower "-"
         'menu " " ; space key
@@ -193,12 +197,14 @@
                             #:ignore [ignore (list )]
                             #:separator? [separator? #t]
                             #:linear-nav [linear-nav #t]
-                            #:auto-reveal [auto-reveal #t])
+                            #:auto-reveal [auto-reveal #t]
+                            #:use-trash [use-trash 'auto])
   (set! *canopy-side* side)
   (set! *canopy-ignore-set* (apply hashset ignore))
   (set! *canopy-show-separator?* separator?)
   (set! *canopy-linear-nav?* linear-nav)
-  (set! *canopy-auto-reveal* auto-reveal))
+  (set! *canopy-auto-reveal* auto-reveal)
+  (set! *canopy-use-trash* use-trash))
 
 (define (canopy-set-linear-nav! on?)
   (set! *canopy-linear-nav?* on?))
@@ -320,7 +326,9 @@
    (list (canopy-help-key 'create) "Create file or dir")
    (list (canopy-help-key 'rename) "Rename entry")
    (list (canopy-help-key 'move) "Move entry")
-   (list (canopy-help-key 'delete) "Delete entry")
+   (list (string-append (canopy-help-key 'yank) " / " (canopy-help-key 'paste)) "Yank / paste copy")
+   (list (canopy-help-key 'copy-path) "Copy path to clipboard")
+   (list (canopy-help-key 'delete) "Delete entry (trash if available)")
    (list (canopy-help-key 'refresh) "Refresh tree")
    (list (canopy-help-key 'toggle-hidden) "Toggle dotfiles")
    (list (canopy-help-key 'toggle-git-ignored) "Toggle git-ignored")
@@ -928,6 +936,52 @@
                          "cursor" canopy-modal-cursor-fn))))
 
 ;; shells out to mv mkdir since steel has no rename builtin
+(define (canopy-string-join parts sep)
+  (if (null? parts)
+      ""
+      (let loop ([rest (cdr parts)] [acc (car parts)])
+        (if (null? rest) acc (loop (cdr rest) (string-append acc sep (car rest)))))))
+
+(define (canopy-shell-single-quote s)
+  (string-append "'" (canopy-string-join (split-many s "'") "'\\''") "'"))
+
+(define (canopy-run-sh! script err-label)
+  (let ([proc (~> (command "sh" (list "-c" script))
+                  with-stdout-piped
+                  with-stderr-piped
+                  spawn-process)])
+    (if (Ok? proc)
+        (let ([stderr (read-port-to-string (child-stderr (Ok->value proc)))])
+          (when (not (string=? (trim stderr) ""))
+            (error (trim stderr))))
+        (error (string-append err-label ": could not spawn process")))))
+
+;; first available of wl-copy / xclip / pbcopy gets the text
+(define (canopy-copy-to-clipboard! text)
+  (canopy-run-sh!
+   (string-append "printf '%s' " (canopy-shell-single-quote text)
+                  " | { wl-copy 2>/dev/null || xclip -selection clipboard 2>/dev/null"
+                  " || pbcopy 2>/dev/null; }")
+   "clipboard"))
+
+(define (canopy-run-cp! from-path to-path)
+  (canopy-run-sh!
+   (string-append "cp -r " (canopy-shell-single-quote from-path) " "
+                  (canopy-shell-single-quote to-path))
+   "cp"))
+
+;; moves the entry to the system trash; #f when no trash tool exists
+(define (canopy-try-trash! path)
+  (with-handler
+    (lambda (_) #f)
+    (begin
+      (canopy-run-sh!
+       (string-append "T=" (canopy-shell-single-quote path)
+                      "; trash \"$T\" 2>/dev/null || trash-put \"$T\" 2>/dev/null"
+                      " || gio trash \"$T\" 2>/dev/null || echo 'no trash tool' >&2")
+       "trash")
+      #t)))
+
 (define (canopy-run-mv! from-path to-path)
   (let ([proc (~> (command "mv" (list from-path to-path))
                   with-stdout-piped
@@ -1057,9 +1111,11 @@
           (when confirmed?
             (with-handler
               (lambda (err) (canopy-error (string-append "delete failed: " (error-object-message err))))
-              (begin
-                (canopy-delete-recursive! path)
-                (canopy-info (string-append "deleted " name))))
+              (if (and (not (equal? *canopy-use-trash* 'never)) (canopy-try-trash! path))
+                  (canopy-info (string-append "trashed " name))
+                  (begin
+                    (canopy-delete-recursive! path)
+                    (canopy-info (string-append "deleted " name)))))
             (enqueue-thread-local-callback canopy-refresh-all!))))))))
 
 (struct CanopyBgState ())
@@ -1552,6 +1608,43 @@
      event-result/consume]
     [else event-result/consume]))
 
+(define *canopy-yank-path* #f)
+
+(define (canopy-yank!)
+  (define entry (canopy-current-entry))
+  (when entry
+    (set! *canopy-yank-path* (car entry))
+    (canopy-info (string-append "yanked " (canopy-relpath (car entry))))))
+
+;; copies the yanked entry into the dir under the cursor (or the cursor's parent)
+(define (canopy-paste!)
+  (define entry (canopy-current-entry))
+  (cond
+    [(not *canopy-yank-path*) (canopy-info "canopy: nothing yanked")]
+    [(not entry) void]
+    [else
+     (define target-dir (if (is-dir? (car entry)) (car entry) (canopy-parent-path (car entry))))
+     (define dest (string-append target-dir (path-separator) (file-name *canopy-yank-path*)))
+     (cond
+       [(or (is-file? dest) (is-dir? dest))
+        (canopy-error (string-append "paste: " (canopy-relpath dest) " already exists"))]
+       [else
+        (with-handler
+          (lambda (err) (canopy-error (string-append "paste failed: " (error-object-message err))))
+          (begin
+            (canopy-run-cp! *canopy-yank-path* dest)
+            (canopy-info (string-append "pasted " (canopy-relpath dest)))))
+        (canopy-refresh-all!)])]))
+
+(define (canopy-copy-path!)
+  (define entry (canopy-current-entry))
+  (when entry
+    (with-handler
+      (lambda (err) (canopy-error (string-append "copy path failed: " (error-object-message err))))
+      (begin
+        (canopy-copy-to-clipboard! (car entry))
+        (canopy-info (string-append "copied path " (car entry)))))))
+
 (define (canopy-command-action! action)
   (cond
     [(equal? action 'down) (canopy-cursor-down!) event-result/consume]
@@ -1568,6 +1661,9 @@
      event-result/consume]
     [(equal? action 'move) (canopy-prompt-move!) event-result/consume]
     [(equal? action 'reveal) (canopy-reveal-current-file!) event-result/consume]
+    [(equal? action 'yank) (canopy-yank!) event-result/consume]
+    [(equal? action 'paste) (canopy-paste!) event-result/consume]
+    [(equal? action 'copy-path) (canopy-copy-path!) event-result/consume]
     [(equal? action 'toggle-hidden) (canopy-toggle-hidden!) event-result/consume]
     [(equal? action 'toggle-git-ignored) (canopy-toggle-git-ignored!) event-result/consume]
     [(equal? action 'wider) (canopy-wider!) event-result/consume]
