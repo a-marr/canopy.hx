@@ -499,6 +499,13 @@
 (define (canopy-git-status path)
   (hash-try-get *canopy-git-status-map* (canopy-git-relpath path)))
 
+;; git state renders as a themed dot plus a matching filename tint
+(define (canopy-git-scope status)
+  (cond
+    [(equal? status 'deleted) (theme-scope-ref "diff.minus")]
+    [(or (equal? status 'untracked) (equal? status 'added)) (theme-scope-ref "diff.plus")]
+    [else (theme-scope-ref "diff.delta")]))
+
 ;; a directory is marked when any changed file lives underneath it
 (define (canopy-dir-has-changes? path)
   (define rel (string-append (canopy-git-relpath path) "/"))
@@ -516,10 +523,17 @@
   (define files (sort (filter (lambda (p) (not (is-dir? p))) lst) string<?))
   (append dirs files))
 
+;; slim Nerd Font angle chevrons, built from codepoints so no editor or
+;; copy-paste step can silently mangle the private-use glyphs
+(define *canopy-chevron-collapsed* (string (integer->char #xf105) #\space)) ; nf-fa-angle_right
+(define *canopy-chevron-expanded*  (string (integer->char #xf107) #\space)) ; nf-fa-angle_down
+
 (define (canopy-dir-marker path)
   (if (hash-contains? *canopy-directories* path)
-      (if (hash-try-get *canopy-directories* path) "▶ " "▼ ")
-      "▶ "))
+      (if (hash-try-get *canopy-directories* path)
+          *canopy-chevron-collapsed*
+          *canopy-chevron-expanded*)
+      *canopy-chevron-collapsed*))
 
 (define (canopy-build-tree!)
   (define result '())
@@ -528,7 +542,8 @@
     (unless (or (hashset-contains? *canopy-ignore-set* name)
                 (and (not *canopy-show-hidden*) (canopy-dotfile? name))
                 (and (not *canopy-show-git-ignored*) (canopy-git-ignored? path)))
-      (define indent (canopy-repeat-str "  " depth))
+      ;; indent guides: one faint spine per ancestor level (rendered dim)
+      (define indent (canopy-repeat-str "│ " depth))
       (define marker (if (is-dir? path) (canopy-dir-marker path) "  "))
       (set! result (cons (list path indent marker name) result))
       (when (is-dir? path)
@@ -1453,6 +1468,7 @@
   (define hl-style (if *canopy-focused* hl-base (style-with-dim hl-base)))
   (define dir-style (canopy-with-panel-bg (theme-scope-ref "ui.text.info")))
   (define dim-style (canopy-with-panel-bg (style-with-dim (theme-scope-ref "ui.text"))))
+  (define guide-style (canopy-with-panel-bg (style-with-dim (theme-scope-ref "ui.virtual.indent-guide"))))
   (define title-style (if *canopy-focused* (style-with-bold dir-style) dim-style))
 
   ;; no border for cleaner look
@@ -1546,11 +1562,13 @@
                 (define icon (if dir? (glyph-dir-icon name) (canopy-file-icon name)))
                 (define icon-color (if dir? (glyph-dir-color name) (canopy-file-color name)))
                 (define git-status (and (not dir?) (canopy-git-status rel)))
-                (define git-icon (if git-status (glyph-git-icon git-status) " "))
-                (define git-color (if git-status (glyph-git-color git-status) #f))
+                (define git-style (and git-status (canopy-with-panel-bg (canopy-git-scope git-status))))
                 (define y (+ list-y0 row))
                 (define hl? (and (not dir?) (equal? rel selected-rel)))
-                (define row-style (cond [hl? hl-style] [dir? dir-style] [else text-style]))
+                (define row-style (cond [hl? hl-style]
+                                        [dir? dir-style]
+                                        [git-style git-style]
+                                        [else text-style]))
                 (define prefix-w (string-length own-prefix))
                 (define icon-w (string-length icon))
                 (define git-x (+ x0 prefix-w icon-w 1))
@@ -1564,8 +1582,8 @@
                 (frame-set-string! frame x0 y own-prefix row-style)
                 (frame-set-string! frame (+ x0 prefix-w) y icon (glyph-style icon-color #:base row-style))
                 (unless dir?
-                  (frame-set-string! frame git-x y git-icon
-                                      (if git-color (glyph-style git-color #:base row-style) row-style)))
+                  (frame-set-string! frame git-x y (if git-status "●" " ")
+                                      (if git-style git-style row-style)))
                 (if (and positions (pair? positions))
                     (canopy-render-name-hl frame name-x y name avail row-style (canopy-match-style row-style) positions)
                     (frame-set-string! frame name-x y (canopy-truncate name avail) row-style))
@@ -1591,11 +1609,16 @@
               (if dir?
                   (and (canopy-dir-has-changes? path) 'modified)
                   (canopy-git-status path)))
-            (define git-icon (if git-status (glyph-git-icon git-status) " "))
-            (define git-color (if git-status (glyph-git-color git-status) #f))
+            (define git-style (and git-status (canopy-with-panel-bg (canopy-git-scope git-status))))
             (define y (+ list-y0 row))
             (define hl? (= abs-idx *canopy-cursor*))
-            (define row-style (cond [hl? hl-style] [dir? dir-style] [else text-style]))
+            (define root? (equal? path (canopy-root)))
+            (define row-style (cond [hl? hl-style]
+                                    [root? (style-with-bold dir-style)]
+                                    [dir? dir-style]
+                                    [git-style git-style]
+                                    [else text-style]))
+            (define indent-w (string-length indent))
             (define prefix-w (string-length prefix))
             (define icon-w (string-length icon))
             (define git-x (+ x0 prefix-w icon-w 1))
@@ -1605,10 +1628,12 @@
             (define avail (max 0 (- max-text-w prefix-w icon-w 1 git-w gap)))
             (when hl?
               (frame-set-string! frame x0 y (make-string list-w #\space) hl-style))
-            (frame-set-string! frame x0 y prefix row-style)
+            ;; faint depth guides, dim chevron, then the icon / dot / name
+            (frame-set-string! frame x0 y indent (if hl? hl-style guide-style))
+            (frame-set-string! frame (+ x0 indent-w) y marker (if hl? hl-style dim-style))
             (frame-set-string! frame (+ x0 prefix-w) y icon (glyph-style icon-color #:base row-style))
-            (frame-set-string! frame git-x y git-icon
-                                (if git-color (glyph-style git-color #:base row-style) row-style))
+            (frame-set-string! frame git-x y (if git-status "●" " ")
+                                (if git-style git-style row-style))
             (frame-set-string! frame name-x y (canopy-truncate name avail) row-style)
             (loop (cdr items) (+ row 1)))))))
 

@@ -35,9 +35,11 @@ Status: v0 in active development. See SPEC in the parent project.
 | `+` / `-` | resize |
 | `Esc`, `Ctrl-l`, other chords | focus editor |
 
-Git status badges mark changed files and propagate to their parent
-directories; badges match paths against the repo root, so they survive
-root dives.
+The look: faint indent guides trace depth, directories carry slim
+chevrons, and git state renders as a themed dot with the filename
+tinted to match (diff colors from your theme). Clean files stay plain;
+changed state propagates to parent directories as a dot. Badges match
+paths against the repo root, so they survive root dives.
 
 Cursor semantics: refocusing the tree restores your last position. The
 tree only jumps to the active file when the buffer actually changed
