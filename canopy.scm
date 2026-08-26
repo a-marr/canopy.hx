@@ -2049,9 +2049,10 @@
      (canopy-switch-to-editor!)]
 
     [else
+     ;; refocusing restores the last tree position; the auto-reveal detector
+     ;; (buffer changes while unfocused) and the f key handle revealing
      (set! *canopy-focused* #t)
      (canopy-scan-git-ignored! (canopy-root))
-     (canopy-reveal-current-file!)
      (push-component! (canopy-make-fg-component))]))
 
 ;;@doc
@@ -2070,7 +2071,9 @@
        (set! *canopy-typing?* #f)
        (canopy-scan-git-ignored! (canopy-root))
        (canopy-load-state!)
-       (canopy-reveal-current-file!)
+       ;; no explicit reveal: the auto-reveal detector fires when the active
+       ;; buffer differs from the last one seen, covering startup and
+       ;; buffer-changed-while-hidden, while preserving the position otherwise
        (canopy-scan-files!)
        (push-component! (canopy-make-bg-component))
        ;; the dock narrows the editor mid-frame; force a clean second frame

@@ -37,7 +37,12 @@ Status: v0 in active development. See SPEC in the parent project.
 
 Git status badges mark changed files and propagate to their parent
 directories; badges match paths against the repo root, so they survive
-root dives. The tree follows the focused buffer (`#:auto-reveal`).
+root dives.
+
+Cursor semantics: refocusing the tree restores your last position. The
+tree only jumps to the active file when the buffer actually changed
+since the tree last saw it (`#:auto-reveal`, also covering startup and
+changes made while the panel was hidden), or on demand via `f`.
 Renaming or moving a file whose buffer is open and clean re-paths the
 buffer; a dirty buffer gets a warning instead. Expanded directories
 persist per root under `~/.local/state/canopy/`. File icons come from
