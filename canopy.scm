@@ -1961,6 +1961,12 @@
 
     [(and (char? ch) (char=? ch #\?)) (canopy-command-action! 'menu)] ; help alias
 
+    ;; : opens the editor's command line (e.g. :qa!) instead of being swallowed
+    [(and (char? ch) (char=? ch #\:))
+     (canopy-switch-to-editor!)
+     (enqueue-thread-local-callback command_mode)
+     event-result/close]
+
     [(char? ch)
      (set! *canopy-pending-g* #f)
      (define action (canopy-action-for-char ch))
