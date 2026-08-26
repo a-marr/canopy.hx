@@ -2064,8 +2064,6 @@
      (unless *canopy-active*
        (set! *canopy-active* #t)
        (set! *canopy-focused* #f)
-       (set! *canopy-cursor* 0)
-       (set! *canopy-window-start* 0)
        (set! *canopy-query* "")
        (set! *canopy-search-results* '())
        (set! *canopy-typing?* #f)
@@ -2073,7 +2071,11 @@
        (canopy-load-state!)
        ;; no explicit reveal: the auto-reveal detector fires when the active
        ;; buffer differs from the last one seen, covering startup and
-       ;; buffer-changed-while-hidden, while preserving the position otherwise
+       ;; buffer-changed-while-hidden. Rebuild the listing (it may have gone
+       ;; stale while hidden) and keep the cursor where it was, clamped.
+       (canopy-build-tree!)
+       (set! *canopy-cursor* (min *canopy-cursor* (max 0 (- (length *canopy-tree*) 1))))
+       (canopy-ensure-cursor-visible!)
        (canopy-scan-files!)
        (push-component! (canopy-make-bg-component))
        ;; the dock narrows the editor mid-frame; force a clean second frame
