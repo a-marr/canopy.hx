@@ -195,6 +195,8 @@
 
 (provide canopy-open)
 (provide canopy-start!)
+(provide canopy-focus)
+(provide canopy-toggle)
 (provide canopy-close)
 (provide canopy-configure!)
 (provide canopy-set-style!)
@@ -376,7 +378,7 @@
    (list (canopy-help-key 'toggle-hidden) "Toggle dotfiles")
    (list (canopy-help-key 'toggle-git-ignored) "Toggle git-ignored")
    (list (string-append (canopy-help-key 'wider) " / " (canopy-help-key 'narrower)) "Widen or narrow panel")
-   (list "Esc" "Focus editor")
+   (list "Esc / C-l" "Focus editor")
    (list (canopy-help-key 'quit) "Close panel")))
 
 ;; mini keybinds
@@ -1935,6 +1937,8 @@
         event-result/consume]
        [(char=? ch #\s) (canopy-open-current! 'horizontal)]
        [(char=? ch #\v) (canopy-open-current! 'vertical)]
+       ;; C-h means "go left"; the tree is already leftmost, so stay put
+       [(char=? ch #\h) event-result/consume]
        [else (canopy-switch-to-editor!) event-result/close])]
 
     ;; remaining ctrl/alt chords belong to the editor: hand focus back (like
@@ -2068,7 +2072,12 @@
        (canopy-load-state!)
        (canopy-reveal-current-file!)
        (canopy-scan-files!)
-       (push-component! (canopy-make-bg-component))))))
+       (push-component! (canopy-make-bg-component))
+       ;; the dock narrows the editor mid-frame; force a clean second frame
+       ;; (deferred a tick, like canopy-close!) or the viewport stays blank
+       ;; until the next keypress
+       (enqueue-thread-local-callback
+        (lambda () (helix.redraw '())))))))
 
 (define *canopy-mini-min-w* 14)
 (define *canopy-mini-max-w* 40)
@@ -2682,3 +2691,19 @@
     (if (equal? *canopy-style* 'mini)
         (canopy-mini-close!)
         (canopy-close!))))
+
+;;@doc
+;; Focus the docked tree, opening it first if it is not visible. A no-op when
+;; the tree already holds focus (unlike canopy-open, which would bounce back).
+(define (canopy-focus)
+  (cond
+    [(equal? *canopy-style* 'mini) (canopy-mini-open!)]
+    [(and *canopy-active* *canopy-focused*) void]
+    [else (canopy-snacks-open!)]))
+
+;;@doc
+;; Toggle the docked tree's visibility without moving focus into it.
+(define (canopy-toggle)
+  (if *canopy-active*
+      (canopy-close)
+      (canopy-start!)))

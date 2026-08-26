@@ -33,7 +33,7 @@ Status: v0 in active development. See SPEC in the parent project.
 | `.` / `i` | toggle dotfiles / git-ignored |
 | `R` | refresh |
 | `+` / `-` | resize |
-| `Esc`, any ctrl/alt chord | focus editor |
+| `Esc`, `Ctrl-l`, other chords | focus editor |
 
 Git status badges mark changed files and propagate to their parent
 directories; badges match paths against the repo root, so they survive
@@ -62,9 +62,17 @@ raw bytes.
                    #:use-trash 'auto) ; 'never deletes directly
 (canopy-set-style! 'snacks)           ; or 'mini (floating columns)
 
+;; Space-e toggles visibility; C-h/C-l move focus tree <-> buffer.
+;; backspace aliases C-h for terminals using legacy encoding.
 (keymap (global)
-        (normal (space (e ":canopy-open"))))
+        (normal (space (e ":canopy-toggle"))
+                (C-h ":canopy-focus")
+                (backspace ":canopy-focus")))
 ```
+
+Commands: `:canopy-open` (focus, opening if needed, Esc-toggle style),
+`:canopy-focus` (focus, no-op if already focused), `:canopy-toggle`
+(visibility only), `:canopy-close`, plus `(canopy-start!)` for init.scm.
 
 ## License
 
