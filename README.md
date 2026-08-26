@@ -46,6 +46,26 @@ devicons.hx (nvim-tree catalog).
 Known-binary files are refused with a status message instead of opening as
 raw bytes.
 
+## Configuration
+
+```scheme
+;; init.scm
+(require "canopy/canopy.scm")
+(require "helix/keymaps.scm")
+
+(canopy-start!)                       ; dock at startup, editor keeps focus
+
+(canopy-configure! 'left              ; or 'right
+                   #:ignore (list ".git" "target")
+                   #:linear-nav #t    ; sibling-wrap when #f
+                   #:auto-reveal #t   ; follow the focused buffer
+                   #:use-trash 'auto) ; 'never deletes directly
+(canopy-set-style! 'snacks)           ; or 'mini (floating columns)
+
+(keymap (global)
+        (normal (space (e ":canopy-open"))))
+```
+
 ## License
 
 MIT. Based on forest.hx, Copyright (c) 2026 Raffaele Meo.

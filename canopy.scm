@@ -194,6 +194,7 @@
       [else (loop (cdr ks))])))
 
 (provide canopy-open)
+(provide canopy-start!)
 (provide canopy-close)
 (provide canopy-configure!)
 (provide canopy-set-style!)
@@ -1194,7 +1195,10 @@
 (define (canopy-panel-x0 rect w)
   (if (equal? *canopy-side* 'right) (- (area-width rect) w) 0))
 
-(define (canopy-snacks-y0) 1)
+;; row 0 belongs to the bufferline, but with bufferline = "multiple" helix only
+;; draws it for >1 open documents; reserving it unconditionally leaves a hole
+(define (canopy-snacks-y0)
+  (if (> (length (editor-all-documents)) 1) 1 0))
 
 (define *canopy-query-prefix* "/ ")
 
@@ -2045,6 +2049,26 @@
      (canopy-scan-git-ignored! (canopy-root))
      (canopy-reveal-current-file!)
      (push-component! (canopy-make-fg-component))]))
+
+;;@doc
+;; Dock the tree at startup without taking focus; the editor keeps input and
+;; canopy-open (e.g. Space-e) focuses the panel. Call from init.scm.
+(define (canopy-start!)
+  (enqueue-thread-local-callback
+   (lambda ()
+     (unless *canopy-active*
+       (set! *canopy-active* #t)
+       (set! *canopy-focused* #f)
+       (set! *canopy-cursor* 0)
+       (set! *canopy-window-start* 0)
+       (set! *canopy-query* "")
+       (set! *canopy-search-results* '())
+       (set! *canopy-typing?* #f)
+       (canopy-scan-git-ignored! (canopy-root))
+       (canopy-load-state!)
+       (canopy-reveal-current-file!)
+       (canopy-scan-files!)
+       (push-component! (canopy-make-bg-component))))))
 
 (define *canopy-mini-min-w* 14)
 (define *canopy-mini-max-w* 40)
