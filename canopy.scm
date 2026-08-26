@@ -896,15 +896,15 @@
   (enqueue-thread-local-callback
    (lambda ()
      (canopy-clear-clip!)
-     (helix.redraw '()))))
+     (helix.redraw))))
 
 (define (canopy-wider!)
   (set! *canopy-width* (min *canopy-max-width* (+ *canopy-width* 2)))
-  (helix.redraw '()))
+  (helix.redraw))
 
 (define (canopy-narrower!)
   (set! *canopy-width* (max *canopy-min-width* (- *canopy-width* 2)))
-  (helix.redraw '()))
+  (helix.redraw))
 
 (define *canopy-modal-open?* #f)
 (define *canopy-modal-mode* 'input)
@@ -1647,7 +1647,7 @@
     [dir
      ;; scrolling over the panel reads as inspecting it, not entering it
      (canopy-debounce-scroll! (lambda () (canopy-scroll-by! dir *canopy-scroll-amount*)))
-     (helix.redraw '()) ; unfocused, so consuming alone won't re-render
+     (helix.redraw) ; unfocused, so consuming alone won't re-render
      event-result/consume]
     [else event-result/ignore]))
 
@@ -2055,6 +2055,29 @@
      (canopy-scan-git-ignored! (canopy-root))
      (push-component! (canopy-make-fg-component))]))
 
+;; hx <directory> auto-opens the file picker before our deferred dock runs,
+;; and the compositor is push-ordered, so the panel would paint over the
+;; picker's left edge. Recreate the picker so it stacks above the tree.
+(define *canopy-startup-handled* #f)
+
+(define (canopy-launched-with-directory?)
+  (let loop ([args (cdr (command-line))])
+    (cond
+      [(null? args) #f]
+      [(equal? (car args) "--") #f]
+      [(is-dir? (car args)) #t]
+      [else (loop (cdr args))])))
+
+(define (canopy-restack-startup-picker!)
+  (unless *canopy-startup-handled*
+    (set! *canopy-startup-handled* #t)
+    (when (canopy-launched-with-directory?)
+      (with-handler
+        (lambda (_) void)
+        (begin
+          (pop-last-component-by-name! "picker")
+          (file_picker))))))
+
 ;;@doc
 ;; Dock the tree at startup without taking focus; the editor keeps input and
 ;; canopy-open (e.g. Space-e) focuses the panel. Call from init.scm.
@@ -2078,11 +2101,12 @@
        (canopy-ensure-cursor-visible!)
        (canopy-scan-files!)
        (push-component! (canopy-make-bg-component))
+       (canopy-restack-startup-picker!)
        ;; the dock narrows the editor mid-frame; force a clean second frame
        ;; (deferred a tick, like canopy-close!) or the viewport stays blank
        ;; until the next keypress
        (enqueue-thread-local-callback
-        (lambda () (helix.redraw '())))))))
+        (lambda () (helix.redraw)))))))
 
 (define *canopy-mini-min-w* 14)
 (define *canopy-mini-max-w* 40)
