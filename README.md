@@ -23,7 +23,8 @@ Status: v0 in active development. See SPEC in the parent project.
 | `f` | reveal current buffer's file (expand ancestors) |
 | `>` / `<` | dive into dir as new root / climb out |
 | `P` | toggle file preview popup |
-| `?` or `Space` | help popup |
+| `Space f` / `Space e` | file picker / toggle panel (mini-leader) |
+| `?` or `Space Space` | help popup |
 | `n` / `N` | new file / new directory |
 | `r` / `m` | rename / move |
 | `y` / `p` | yank entry / paste a copy |

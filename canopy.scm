@@ -155,6 +155,7 @@
 (define *canopy-search-results* '())
 (define *canopy-typing?* #f)
 (define *canopy-pending-g* #f) ; first g of a gg sequence seen
+(define *canopy-pending-space* #f) ; mini-leader armed (space f / space e / space space)
 
 (define *canopy-default-keybinds*
   (hash 'down "j"
@@ -179,8 +180,7 @@
         'preview "P"
         'wider "+"
         'narrower "-"
-        'menu " " ; space key
-        'quit "q"))
+        'quit "q")) ; space is a mini-leader handled in the event loop; ? opens help
 
 (define *canopy-keybinds* *canopy-default-keybinds*)
 
@@ -367,6 +367,7 @@
     (list "> / <" "Dive into dir as root / climb out")
     (list (canopy-help-key 'preview) "Toggle preview popup")
    (list (canopy-help-key 'search) "Fuzzy search")
+   (list "Space f / Space e" "File picker / toggle panel")
    (list (canopy-help-key 'reveal) "Reveal current file")
    (list (canopy-help-key 'create) "Create file or dir")
    (list (canopy-help-key 'rename) "Rename entry")
@@ -1634,7 +1635,32 @@
             (frame-set-string! frame (+ x0 prefix-w) y icon (glyph-style icon-color #:base row-style))
             (frame-set-string! frame git-x y (if git-status "●" " ")
                                 (if git-style git-style row-style))
-            (frame-set-string! frame name-x y (canopy-truncate name avail) row-style)
+            (define crumb-w
+              (if (and root? *canopy-root-override*)
+                  ;; breadcrumb: dim parent context ahead of the bold root name
+                  (let* ([crumb (string-append (file-name (canopy-parent-path path)) " › ")]
+                         [crumb-shown (canopy-truncate crumb avail)])
+                    (frame-set-string! frame name-x y crumb-shown
+                                        (if hl? (style-with-dim hl-style) dim-style))
+                    (frame-set-string! frame (+ name-x (string-length crumb-shown)) y
+                                        (canopy-truncate name (max 0 (- avail (string-length crumb-shown))))
+                                        row-style)
+                    (string-length crumb-shown))
+                  (begin
+                    (frame-set-string! frame name-x y (canopy-truncate name avail) row-style)
+                    0)))
+            ;; expanded-but-empty dirs say so instead of silently flipping
+            (when (and dir? (canopy-dir-expanded? path)
+                       (let ([rest (cdr items)])
+                         (or (null? rest)
+                             (not (equal? (canopy-parent-path (car (car rest))) path)))))
+              (define label-x (+ name-x crumb-w (string-length name) 1))
+              (when (< label-x (+ x0 max-text-w -7))
+                (frame-set-string! frame label-x y "(empty)"
+                                    (if hl? (style-with-dim hl-style) dim-style))))
+            ;; focus bar: instantly answers "does the tree own my keys?"
+            (when (and hl? *canopy-focused*)
+              (frame-set-string! frame x0 y "▎" (style-with-bold dir-style)))
             (loop (cdr items) (+ row 1)))))))
 
 ;; canopy-snacks-open! would reveal the current file and move off the clicked row
@@ -1829,7 +1855,10 @@
   (or *canopy-root-override* (helix-find-workspace)))
 
 (define (canopy-set-root! path)
-  (set! *canopy-root-override* path)
+  ;; climbing back to the workspace clears the override, so the breadcrumb
+  ;; disappears and the pristine state is reachable again
+  (set! *canopy-root-override*
+        (if (equal? path (helix-find-workspace)) #f path))
   ;; the new root always shows expanded
   (set! *canopy-directories* (hash-insert *canopy-directories* path #f))
   (set! *canopy-cursor* 0)
@@ -1972,6 +2001,26 @@
        (not (or (equal? m #f) (equal? m 0) (equal? m key-modifier-shift))))
      (canopy-switch-to-editor!)
      event-result/close]
+
+    ;; armed mini-leader: space f = file picker (focus follows via auto-reveal),
+    ;; space e = toggle panel, space space (or anything else) = help
+    [(and *canopy-pending-space* (char? ch))
+     (set! *canopy-pending-space* #f)
+     (set! *canopy-pending-g* #f)
+     (cond
+       [(char=? ch #\f)
+        (canopy-switch-to-editor!)
+        (enqueue-thread-local-callback file_picker)
+        event-result/close]
+       [(char=? ch #\e)
+        (canopy-toggle)
+        event-result/consume]
+       [else (canopy-command-action! 'menu)])]
+
+    [(and (char? ch) (char=? ch #\space))
+     (set! *canopy-pending-g* #f)
+     (set! *canopy-pending-space* #t)
+     event-result/consume]
 
     [(and (char? ch) (equal? ch #\=)) (canopy-wider!) event-result/consume] ; old alias not remappable
 
