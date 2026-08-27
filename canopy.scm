@@ -406,8 +406,8 @@
   (define w (min (max 0 (- (area-width rect) 2)) (+ content-w 4)))
   ;; two borders around one row per binding
   (define h (min (max 0 (- (area-height rect) 2)) (+ (length rows) 2)))
-  ;; placed above the reserved line e.g for moka statusline
-  (define bottom (+ (canopy-reserved-bottom) 1))
+  ;; placed above the statusline plus any reserved line e.g for moka
+  (define bottom (+ (canopy-reserved-bottom) 2))
   (define x (max 0 (- (area-width rect) w)))
   (define y (max 0 (- (area-height rect) h bottom)))
   (list x y w h key-w))
@@ -415,10 +415,13 @@
 (define (canopy-help-render state rect frame)
   (define rows (if (equal? *canopy-help-style* 'mini) (canopy-mini-help-rows) (canopy-snacks-help-rows)))
 
-  (define bg-style (theme-scope-ref "ui.menu"))
-  (define text-style (theme-scope-ref "ui.text"))
-  (define key-style (style-with-bold (theme-scope-ref "ui.text.info")))
-  (define border-style (style-with-dim text-style))
+  ;; popup kit: ui.popup backdrop, undimmed border, bold title in the edge
+  (define bg-style (theme-scope-ref "ui.popup"))
+  (define popup-bg (style->bg bg-style))
+  (define (on-popup s) (if popup-bg (style-bg s popup-bg) s))
+  (define text-style (on-popup (theme-scope-ref "ui.text")))
+  (define key-style (style-with-bold (on-popup (theme-scope-ref "ui.text.info"))))
+  (define border-style text-style)
 
   (define m (canopy-help-metrics rect rows))
   (define x (list-ref m 0))
@@ -431,7 +434,9 @@
   (define inner-x (+ x 1))
 
   (buffer/clear-with frame box bg-style)
-  (block/render frame box (make-block bg-style border-style "all" "plain"))
+  (block/render frame box (make-block bg-style border-style "all" "rounded"))
+  (when (> w 10)
+    (frame-set-string! frame (+ x 2) y " help " (style-with-bold border-style)))
 
   (let loop ([rs rows] [row 0])
     (when (and (pair? rs) (< row (- h 2)))
@@ -524,6 +529,35 @@
   (define files (sort (filter (lambda (p) (not (is-dir? p))) lst) string<?))
   (append dirs files))
 
+;; path -> literal link target for every symlink visible in the tree; rebuilt
+;; on each tree build so replaced links can't go stale, targets cached across
+;; builds to avoid respawning readlink
+(define *canopy-symlink-map* (hash))
+
+(define (canopy-readlink path)
+  (with-handler
+    (lambda (_) #f)
+    (let ([proc (~> (command "readlink" (list path))
+                    with-stdout-piped
+                    with-stderr-piped
+                    spawn-process)])
+      (and (Ok? proc)
+           (let ([out (trim (read-port-to-string (child-stdout (Ok->value proc))))])
+             (and (> (string-length out) 0) out))))))
+
+;; list a directory through the entry iterator so symlinks are known from the
+;; dirent itself (file-metadata follows links and can't see them); returns
+;; (path . symlink?) pairs
+(define (canopy-list-dir-entries dir)
+  (with-handler
+    (lambda (_) '())
+    (let ([it (read-dir-iter dir)])
+      (let loop ([acc '()])
+        (let ([e (read-dir-iter-next! it)])
+          (if e
+              (loop (cons (cons (read-dir-entry-path e) (read-dir-entry-is-symlink? e)) acc))
+              (reverse acc)))))))
+
 ;; slim Nerd Font angle chevrons, built from codepoints so no editor or
 ;; copy-paste step can silently mangle the private-use glyphs
 (define *canopy-chevron-collapsed* (string (integer->char #xf105) #\space)) ; nf-fa-angle_right
@@ -538,6 +572,18 @@
 
 (define (canopy-build-tree!)
   (define result '())
+  (define new-links (hash))
+  (define (children-of path)
+    (map (lambda (pr)
+           (define p (car pr))
+           (when (cdr pr)
+             (set! new-links
+                   (hash-insert new-links p
+                                (or (hash-try-get *canopy-symlink-map* p)
+                                    (canopy-readlink p)
+                                    "?"))))
+           p)
+         (canopy-list-dir-entries path)))
   (define (walk path depth)
     (define name (file-name path))
     (unless (or (hashset-contains? *canopy-ignore-set* name)
@@ -552,8 +598,9 @@
           (set! *canopy-directories* (hash-insert *canopy-directories* path (> depth 0))))
         (unless (hash-try-get *canopy-directories* path)
           (for-each (lambda (child) (walk child (+ depth 1)))
-                    (canopy-sort-entries (read-dir path)))))))
+                    (canopy-sort-entries (children-of path)))))))
   (walk (canopy-root) 0)
+  (set! *canopy-symlink-map* new-links)
   (set! *canopy-tree* (reverse result)))
 
 (define (canopy-parent-path path)
@@ -754,6 +801,7 @@
 (define (canopy-refresh-all!)
   (define old *canopy-cursor*)
   (canopy-scan-git-ignored! (canopy-root)) ; badges refresh with the tree
+  (set! *canopy-symlink-map* (hash))       ; re-read link targets too
   (canopy-build-tree!)
   (canopy-scan-files!)
   (canopy-refresh-search!)
@@ -925,6 +973,7 @@
 (define *canopy-modal-open?* #f)
 (define *canopy-modal-mode* 'input)
 (define *canopy-modal-label* "")
+(define *canopy-modal-title* "")
 (define *canopy-modal-buffer* "")
 (define *canopy-modal-callback* #f)
 
@@ -945,11 +994,18 @@
   (define x (list-ref origin 0))
   (define y (list-ref origin 1))
   (define w (list-ref origin 2))
-  (define bg-style (theme-scope-ref "ui.background"))
-  (define text-style (theme-scope-ref "ui.text"))
+  ;; the popup kit: elevated ui.popup backdrop, full-strength border, bold
+  ;; title in the top edge (ui.background made the border invisible before)
+  (define bg-style (theme-scope-ref "ui.popup"))
+  (define popup-bg (style->bg bg-style))
+  (define text-style
+    (if popup-bg (style-bg (theme-scope-ref "ui.text") popup-bg) (theme-scope-ref "ui.text")))
   (define modal-area (area x y w 3))
   (buffer/clear-with frame modal-area bg-style)
-  (block/render frame modal-area (make-block bg-style bg-style "all" "rounded"))
+  (block/render frame modal-area (make-block bg-style text-style "all" "rounded"))
+  (when (> (string-length *canopy-modal-title*) 0)
+    (frame-set-string! frame (+ x 2) y (string-append " " *canopy-modal-title* " ")
+                        (style-with-bold text-style)))
   (define text (string-append *canopy-modal-label* *canopy-modal-buffer*))
   (frame-set-string! frame (+ x 1) (+ y 1) (canopy-truncate text (- w 2)) text-style))
 
@@ -994,9 +1050,10 @@
      event-result/consume]
     [else event-result/consume]))
 
-(define (canopy-show-modal! mode label initial-value callback)
+(define (canopy-show-modal! mode title label initial-value callback)
   (set! *canopy-modal-open?* #t)
   (set! *canopy-modal-mode* mode)
+  (set! *canopy-modal-title* title)
   (set! *canopy-modal-label* label)
   (set! *canopy-modal-buffer* initial-value)
   (set! *canopy-modal-callback* callback)
@@ -1098,6 +1155,7 @@
      (lambda ()
        (canopy-show-modal!
         'input
+        "New"
         (string-append "New (end with " (path-separator) " for dir): ")
         (canopy-relpath base)
         (lambda (name)
@@ -1124,6 +1182,7 @@
      (lambda ()
        (canopy-show-modal!
         'input
+        "Rename"
         "Rename: "
         name
         (lambda (new-name)
@@ -1162,6 +1221,7 @@
      (lambda ()
        (canopy-show-modal!
         'input
+        "Move"
         "Move to: "
         rel
         (lambda (new-rel)
@@ -1194,6 +1254,7 @@
      (lambda ()
        (canopy-show-modal!
         'confirm
+        "Delete"
         (string-append "Delete " kind " '" name "'? (y/N) ")
         ""
         (lambda (confirmed?)
@@ -1470,6 +1531,19 @@
   (define dir-style (canopy-with-panel-bg (theme-scope-ref "ui.text.info")))
   (define dim-style (canopy-with-panel-bg (style-with-dim (theme-scope-ref "ui.text"))))
   (define guide-style (canopy-with-panel-bg (style-with-dim (theme-scope-ref "ui.virtual.indent-guide"))))
+
+  ;; header band: the root row doubles as the panel's title bar (menu shade,
+  ;; changed-file count at the right edge); selection styling still wins
+  (define band-bg (style->bg (theme-scope-ref "ui.menu")))
+  ;; count only what lives under the current root, so a dive's header agrees
+  ;; with its rows; relpath == root means the root IS the repo toplevel
+  (define changed-count
+    (let ([keys (hash-keys->list *canopy-git-status-map*)]
+          [rel (canopy-git-relpath (canopy-root))])
+      (if (equal? rel (canopy-root))
+          (length keys)
+          (let ([prefix (string-append rel "/")])
+            (length (filter (lambda (k) (starts-with? k prefix)) keys))))))
   (define title-style (if *canopy-focused* (style-with-bold dir-style) dim-style))
 
   ;; no border for cleaner look
@@ -1588,6 +1662,9 @@
                 (if (and positions (pair? positions))
                     (canopy-render-name-hl frame name-x y name avail row-style (canopy-match-style row-style) positions)
                     (frame-set-string! frame name-x y (canopy-truncate name avail) row-style))
+                ;; same focus bar the tree rows carry
+                (when (and hl? *canopy-focused*)
+                  (frame-set-string! frame x0 y "▎" (style-with-bold dir-style)))
                 (loop (cdr items) (+ row 1))))))
       (let ([visible (canopy-take (canopy-drop *canopy-tree* *canopy-window-start*)
                                    *canopy-visible-height*)])
@@ -1614,11 +1691,14 @@
             (define y (+ list-y0 row))
             (define hl? (= abs-idx *canopy-cursor*))
             (define root? (equal? path (canopy-root)))
-            (define row-style (cond [hl? hl-style]
-                                    [root? (style-with-bold dir-style)]
-                                    [dir? dir-style]
-                                    [git-style git-style]
-                                    [else text-style]))
+            (define band? (and root? (not hl?) band-bg))
+            (define row-style (let ([s (cond [hl? hl-style]
+                                             [root? (style-with-bold dir-style)]
+                                             [dir? dir-style]
+                                             [git-style git-style]
+                                             [else text-style])])
+                                (if band? (style-bg s band-bg) s)))
+            (define band-dim (if band? (style-bg dim-style band-bg) dim-style))
             (define indent-w (string-length indent))
             (define prefix-w (string-length prefix))
             (define icon-w (string-length icon))
@@ -1626,22 +1706,30 @@
             (define git-w 1)
             (define gap 1)
             (define name-x (+ git-x git-w gap))
-            (define avail (max 0 (- max-text-w prefix-w icon-w 1 git-w gap)))
-            (when hl?
-              (frame-set-string! frame x0 y (make-string list-w #\space) hl-style))
+            ;; the band's right edge is reserved for the changed count
+            (define count-w (if (and band? (> changed-count 0))
+                                (+ 3 (string-length (number->string changed-count)))
+                                0))
+            (define avail (max 0 (- max-text-w prefix-w icon-w 1 git-w gap count-w)))
+            (when (or hl? band?)
+              (frame-set-string! frame x0 y (make-string list-w #\space)
+                                  (if hl? hl-style (style-bg text-style band-bg))))
             ;; faint depth guides, dim chevron, then the icon / dot / name
             (frame-set-string! frame x0 y indent (if hl? hl-style guide-style))
-            (frame-set-string! frame (+ x0 indent-w) y marker (if hl? hl-style dim-style))
+            (frame-set-string! frame (+ x0 indent-w) y marker (if hl? hl-style band-dim))
             (frame-set-string! frame (+ x0 prefix-w) y icon (glyph-style icon-color #:base row-style))
-            (frame-set-string! frame git-x y (if git-status "●" " ")
-                                (if git-style git-style row-style))
+            ;; on the band the count replaces the dot
+            (frame-set-string! frame git-x y (if (and git-status (not band?)) "●" " ")
+                                (cond [band? row-style]
+                                      [git-style git-style]
+                                      [else row-style]))
             (define crumb-w
               (if (and root? *canopy-root-override*)
                   ;; breadcrumb: dim parent context ahead of the bold root name
                   (let* ([crumb (string-append (file-name (canopy-parent-path path)) " › ")]
                          [crumb-shown (canopy-truncate crumb avail)])
                     (frame-set-string! frame name-x y crumb-shown
-                                        (if hl? (style-with-dim hl-style) dim-style))
+                                        (if hl? (style-with-dim hl-style) band-dim))
                     (frame-set-string! frame (+ name-x (string-length crumb-shown)) y
                                         (canopy-truncate name (max 0 (- avail (string-length crumb-shown))))
                                         row-style)
@@ -1649,15 +1737,32 @@
                   (begin
                     (frame-set-string! frame name-x y (canopy-truncate name avail) row-style)
                     0)))
+            ;; symlinks carry their literal target, dim, after the name
+            (define link-target (hash-try-get *canopy-symlink-map* path))
+            (define link-w
+              (if link-target
+                  (let* ([shown-name-w (string-length (canopy-truncate name (max 0 (- avail crumb-w))))]
+                         [suffix (canopy-truncate (string-append " → " link-target)
+                                                   (max 0 (- avail crumb-w shown-name-w)))])
+                    (frame-set-string! frame (+ name-x crumb-w shown-name-w) y suffix
+                                        (if hl? (style-with-dim hl-style) band-dim))
+                    (string-length suffix))
+                  0))
             ;; expanded-but-empty dirs say so instead of silently flipping
             (when (and dir? (canopy-dir-expanded? path)
                        (let ([rest (cdr items)])
                          (or (null? rest)
                              (not (equal? (canopy-parent-path (car (car rest))) path)))))
-              (define label-x (+ name-x crumb-w (string-length name) 1))
+              (define label-x (+ name-x crumb-w link-w (string-length name) 1))
               (when (< label-x (+ x0 max-text-w -7))
                 (frame-set-string! frame label-x y "(empty)"
-                                    (if hl? (style-with-dim hl-style) dim-style))))
+                                    (if hl? (style-with-dim hl-style) band-dim))))
+            ;; band right edge: how many files git says changed
+            (when (and band? (> changed-count 0))
+              (define count-str (string-append "● " (number->string changed-count)))
+              (define cx (max (+ x0 1) (- (+ x0 list-w) (string-length count-str) 1)))
+              (frame-set-string! frame cx y count-str
+                                  (style-bg (canopy-git-scope 'modified) band-bg)))
             ;; focus bar: instantly answers "does the tree own my keys?"
             (when (and hl? *canopy-focused*)
               (frame-set-string! frame x0 y "▎" (style-with-bold dir-style)))
@@ -1736,7 +1841,11 @@
                                with-stderr-piped
                                spawn-process)])
                  (if (Ok? proc)
-                     (split-many (read-port-to-string (child-stdout (Ok->value proc))) "\n")
+                     ;; the final newline is a terminator, not an empty line
+                     (let ([ls (split-many (read-port-to-string (child-stdout (Ok->value proc))) "\n")])
+                       (if (and (pair? ls) (equal? (list-ref ls (- (length ls) 1)) ""))
+                           (reverse (cdr (reverse ls)))
+                           ls))
                      (list "<unreadable>"))))]))))
 
 (define (canopy-preview-render! rect frame)
@@ -1755,23 +1864,25 @@
                          (max 5 (- (area-height rect) 4))))
       (define box-y 1)
       (when (> avail-w 20)
-        (define border (theme-scope-ref "ui.text"))
         (define bgp (theme-scope-ref "ui.popup"))
+        (define pbg (style->bg bgp))
+        ;; content in real text styling; bare ui.popup often has no fg
+        (define ptext (if pbg (style-bg (theme-scope-ref "ui.text") pbg) (theme-scope-ref "ui.text")))
         (define box-area (area box-x box-y box-w box-h))
         (buffer/clear-with frame box-area bgp)
-        (block/render frame box-area (make-block bgp border "all" "rounded"))
+        (block/render frame box-area (make-block bgp ptext "all" "rounded"))
         (frame-set-string! frame (+ box-x 2) box-y
                             (string-append " " (canopy-truncate (file-name (car entry)) (- box-w 6)) " ")
-                            (style-with-bold border))
+                            (style-with-bold ptext))
         (let loop ([ls *canopy-preview-lines*] [row 1])
           (cond
             [(or (null? ls) (>= row (- box-h 1))) void]
             [(and (= row (- box-h 2)) (> (length ls) 1))
              ;; more content than rows: say so instead of cutting silently
-             (frame-set-string! frame (+ box-x 1) (+ box-y row) "…" (style-with-dim bgp))]
+             (frame-set-string! frame (+ box-x 1) (+ box-y row) "…" (style-with-dim ptext))]
             [else
              (frame-set-string! frame (+ box-x 1) (+ box-y row)
-                                 (canopy-truncate (car ls) (- box-w 2)) bgp)
+                                 (canopy-truncate (car ls) (- box-w 2)) ptext)
              (loop (cdr ls) (+ row 1))]))))))
 
 (define (canopy-render-bg+preview state rect frame)
@@ -2394,6 +2505,7 @@
    (lambda ()
      (canopy-show-modal!
       'input
+      "New"
       (string-append "New (end with " (path-separator) " for dir): ")
       (canopy-relpath base)
       (lambda (name)
@@ -2420,6 +2532,7 @@
      (lambda ()
        (canopy-show-modal!
         'input
+        "Rename"
         "Rename: "
         name
         (lambda (new-name)
@@ -2442,6 +2555,7 @@
      (lambda ()
        (canopy-show-modal!
         'confirm
+        "Delete"
         (string-append "Delete " kind " '" name "'? (y/N) ")
         ""
         (lambda (confirmed?)
@@ -2460,6 +2574,7 @@
    (lambda ()
      (canopy-show-modal!
       'input
+      "Search"
       "Search: "
       ""
       (lambda (query)

@@ -36,11 +36,15 @@ Status: v0 in active development. See SPEC in the parent project.
 | `+` / `-` | resize |
 | `Esc`, `Ctrl-l`, other chords | focus editor |
 
-The look: faint indent guides trace depth, directories carry slim
-chevrons, and git state renders as a themed dot with the filename
-tinted to match (diff colors from your theme). Clean files stay plain;
-changed state propagates to parent directories as a dot. Badges match
-paths against the repo root, so they survive root dives.
+The look: the root row doubles as a header band (menu-shade background,
+changed-file count at the right edge, hidden when clean). Faint indent
+guides trace depth, directories carry slim chevrons, and git state
+renders as a themed dot with the filename tinted to match (diff colors
+from your theme). Clean files stay plain; changed state propagates to
+parent directories as a dot. Badges match paths against the repo root,
+so they survive root dives. Symlinks carry a dim `→ target` suffix.
+Popups (rename/new/move/delete, help, preview) share one kit: `ui.popup`
+backdrop, visible border, bold title in the top edge.
 
 Cursor semantics: refocusing the tree restores your last position. The
 tree only jumps to the active file when the buffer actually changed
