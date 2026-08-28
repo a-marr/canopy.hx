@@ -3,6 +3,8 @@
 The ultimate file tree for Steel-enabled Helix: a persistent docked sidebar,
 minimalist at rest, powerful on demand.
 
+![canopy docked beside a Python project](assets/screenshot.png)
+
 Forked from [forest.hx](https://github.com/Ra77a3l3-jar/forest.hx) (MIT) and
 reshaped: full vim navigation, filter-search that reshapes the tree, file
 operations that follow open buffers, git awareness, full mouse support.
