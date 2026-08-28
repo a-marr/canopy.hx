@@ -20,12 +20,18 @@ canopy runs inside the Steel-enabled Helix fork, so installing it means
 building that fork plus Steel's package manager. `install.sh` does the whole
 thing from pinned, known-good revisions and is safe to re-run.
 
-Dependencies: git, a Rust toolchain 1.90 or newer ([rustup](https://rustup.rs);
-distro packages often lag), a C compiler, and on Linux the OpenSSL headers plus
-pkg-config. Use a Nerd Font in your terminal for the icons.
+Dependencies:
 
-| Platform | Dependencies |
-|----------|--------------|
+- git
+- a Rust toolchain, 1.90 or newer ([rustup](https://rustup.rs); distro packages often lag)
+- a C compiler
+- on Linux: OpenSSL headers and pkg-config
+- a Nerd Font in your terminal, for the icons
+
+Per platform:
+
+| Platform | Install |
+|----------|---------|
 | macOS | `xcode-select --install` |
 | Fedora | `sudo dnf install git gcc openssl-devel pkgconf-pkg-config` |
 | Ubuntu / Debian | `sudo apt install git build-essential libssl-dev pkg-config` |
