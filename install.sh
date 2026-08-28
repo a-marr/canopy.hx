@@ -80,9 +80,17 @@ fi
 # system OpenSSL when available; the vendored build needs perl and takes longer
 if have pkg-config && pkg-config --exists openssl 2>/dev/null; then
   export OPENSSL_NO_VENDOR=1
+  ssl="system openssl"
+else
+  ssl="vendored openssl (slower build)"
 fi
-echo "ok: git, cc, rust $rust_ver"
+echo "ok: git, cc, rust $rust_ver, $ssl"
 mkdir -p "$SRC_DIR" "$STAMPS"
+# a full build plus grammar sources is about 6 GB
+avail_kb="$(df -Pk "$SRC_DIR" | awk 'NR==2{print $4}')"
+if [ -n "$avail_kb" ] && [ "$avail_kb" -lt $((8*1024*1024)) ]; then
+  warn "less than 8 GB free under $SRC_DIR; the build needs about 6 GB"
+fi
 
 # --- helpers -----------------------------------------------------------------
 # clone_at <repo-url> <rev> <dir>: fresh clone or fetch, hard-pinned to rev
@@ -100,7 +108,7 @@ stamp_set() { printf '%s' "$2" > "$STAMPS/$1"; }
 
 # --- 1. steel tools ----------------------------------------------------------
 say "Steel tools (interpreter, language server, cargo-steel-lib)"
-if stamp_ok steel-tools "$STEEL_REV" && have steel; then
+if stamp_ok steel-tools "$STEEL_REV" && [ -x "$HOME/.cargo/bin/steel" ]; then
   echo "already at pin, skipping"
 else
   cargo install --git "$STEEL_REPO" --rev "$STEEL_REV" \
@@ -113,19 +121,23 @@ fi
 # macOS setups deny (execheap). forge only needs the interpreter, so the
 # feature is stripped: uniform and safe everywhere.
 say "forge (Steel package manager)"
-if stamp_ok forge "$STEEL_REV" && have forge; then
+if stamp_ok forge "$STEEL_REV" && [ -x "$HOME/.cargo/bin/forge" ]; then
   echo "already at pin, skipping"
 else
   clone_at "$STEEL_REPO" "$STEEL_REV" "$SRC_DIR/steel"
   sed -i.bak 's/"biased", "jit2", "imbl"/"biased", "imbl"/' "$SRC_DIR/steel/crates/forge/Cargo.toml"
   rm -f "$SRC_DIR/steel/crates/forge/Cargo.toml.bak"
+  if grep -q '"jit2"' "$SRC_DIR/steel/crates/forge/Cargo.toml"; then
+    warn "could not strip jit2 from forge's Cargo.toml (upstream changed the feature list); refusing to build it with jit2"
+    exit 1
+  fi
   cargo install --path "$SRC_DIR/steel/crates/forge" --force
   stamp_set forge "$STEEL_REV"
 fi
 
 # --- 3. Steel-enabled helix --------------------------------------------------
 say "Steel-enabled hx (this is the long compile)"
-if stamp_ok hx "$HELIX_STEEL_REV" && have hx; then
+if stamp_ok hx "$HELIX_STEEL_REV" && [ -x "$HOME/.cargo/bin/hx" ]; then
   echo "already at pin, skipping"
 else
   clone_at "$HELIX_STEEL_REPO" "$HELIX_STEEL_REV" "$SRC_DIR/helix"
@@ -165,6 +177,14 @@ else
   clone_at "$CANOPY_REPO" "$CANOPY_REV" "$SRC_DIR/canopy"
   (cd "$SRC_DIR/canopy" && forge install)
 fi
+# forge reports errors but still exits 0, so check the result on disk
+COGS="${STEEL_HOME:-$HOME/.local/share/steel}/cogs"
+for cog in canopy notify glyph devicons; do
+  if [ ! -f "$COGS/$cog/cog.scm" ] && [ ! -f "$COGS/$cog/$cog.scm" ]; then
+    warn "forge did not install '$cog' (look for an error above); aborting"
+    exit 1
+  fi
+done
 
 # --- 6. config ---------------------------------------------------------------
 say "Config"
@@ -181,11 +201,15 @@ SNIPPET='(require "canopy/canopy.scm")
         (normal (space (e ":canopy-toggle"))
                 (C-h ":canopy-focus")
                 (backspace ":canopy-focus")))'
-if [ ! -f "$INIT" ]; then
+if [ ! -e "$INIT" ] && [ ! -L "$INIT" ]; then
   printf '%s\n' "$SNIPPET" > "$INIT"
   echo "wrote starter $INIT"
-elif grep -q canopy "$INIT"; then
-  echo "$INIT already mentions canopy, leaving it alone"
+elif [ -L "$INIT" ] && [ ! -e "$INIT" ]; then
+  warn "$INIT is a symlink to a missing file (dotfiles not checked out yet?); add this to it later:"
+  echo
+  printf '%s\n' "$SNIPPET" | sed 's/^/    /'
+elif grep -q 'canopy/canopy.scm' "$INIT"; then
+  echo "$INIT already loads canopy, leaving it alone"
 else
   echo "$INIT exists; add this to it:"
   echo
@@ -193,7 +217,7 @@ else
 fi
 
 # --- done --------------------------------------------------------------------
-say "Done"
+say "Done in $((SECONDS/60))m $((SECONDS%60))s"
 "$HOME/.cargo/bin/hx" --version
 resolved="$(command -v hx || true)"
 echo "hx on PATH resolves to: ${resolved:-<none>}"

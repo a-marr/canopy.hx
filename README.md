@@ -37,7 +37,8 @@ cd canopy.hx
 ./install.sh
 ```
 
-The first run compiles Helix; allow 10 to 20 minutes. It installs `hx`,
+The first run compiles Helix; allow 10 to 20 minutes and about 6 GB under
+the source directory. It installs `hx`,
 `forge`, and the Steel tools to `~/.cargo/bin` (a distro or brew `hx` stays on
 disk as a fallback, so keep `~/.cargo/bin` first on PATH), links the Helix
 runtime, builds the grammars, installs canopy with its dependencies, and writes
@@ -52,7 +53,9 @@ Already on Steel Helix with `forge`? Skip the script:
 forge pkg install --git https://github.com/a-marr/canopy.hx.git
 ```
 
-and add the snippet from Configuration below to `init.scm`.
+and add the snippet from Configuration below to `init.scm`. Use the https
+URL: forge clones through libgit2 without credential callbacks, so ssh
+remotes and private repos fail (and forge still exits 0 when they do).
 
 The fork tracks upstream Helix closely and is daily-driven by its users;
 `install.sh` pins the revision canopy was last tested against.
