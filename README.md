@@ -1,34 +1,33 @@
 # canopy.hx
 
-The ultimate file tree for Steel-enabled Helix: a persistent docked sidebar,
-minimalist at rest, powerful on demand.
+A better file tree for Steel-enabled Helix. Persistent docked sidebar,
+defaults that are sane to me. WIP.
 
 ![canopy docked beside a Python project](assets/screenshot.png)
 
 Forked from [forest.hx](https://github.com/Ra77a3l3-jar/forest.hx) (MIT) and
-reshaped: full vim navigation, filter-search that reshapes the tree, file
-operations that follow open buffers, git awareness, full mouse support.
+mostly rewritten: vim navigation that walks the whole tree, search that
+filters the tree in place, file ops that keep open buffers pointed at the
+right path, git status, mouse support.
 
 Requires mattwparas' Steel-enabled Helix fork (branch `steel-event-system`).
-It does not run on stock Helix, which has no plugin runtime.
+It doesn't run on stock Helix, which has no plugin runtime.
 
-Status: feature-complete for daily use; the API may still shift.
+Status: feature-complete for my daily use; but still WIP. The API may still shift.
 
 ## Install
 
-canopy runs inside the Steel-enabled Helix fork, so installing it means
-building that fork plus Steel's package manager. `install.sh` does the whole
-thing from pinned, known-good revisions and is safe to re-run.
+You need the Steel fork of Helix and `forge`, Steel's package manager.
+`install.sh` builds both from pinned revisions, then installs canopy.
+Re-running it is safe; it skips whatever is already built.
 
 Dependencies:
 
 - git
-- a Rust toolchain, 1.90 or newer ([rustup](https://rustup.rs); distro packages often lag)
+- Rust 1.90+ ([rustup](https://rustup.rs); distro packages lag)
 - a C compiler
-- on Linux: OpenSSL headers and pkg-config
-- a Nerd Font in your terminal, for the icons
-
-Per platform:
+- Linux: OpenSSL headers and pkg-config
+- a Nerd Font, or the icons are boxes
 
 | Platform | Install |
 |----------|---------|
@@ -37,36 +36,32 @@ Per platform:
 | Ubuntu / Debian | `sudo apt install git build-essential libssl-dev pkg-config` |
 | Arch | `sudo pacman -S --needed git base-devel openssl pkgconf` |
 
-Then:
-
 ```sh
 git clone https://github.com/a-marr/canopy.hx.git
 cd canopy.hx
 ./install.sh
 ```
 
-The first run compiles Helix; allow 10 to 20 minutes and about 6 GB under
-the source directory. It installs `hx`,
-`forge`, and the Steel tools to `~/.cargo/bin` (a distro or brew `hx` stays on
-disk as a fallback, so keep `~/.cargo/bin` first on PATH), links the Helix
-runtime, builds the grammars, installs canopy with its dependencies, and writes
-a starter `~/.config/helix/init.scm` if you have none. An existing `init.scm`
-is never edited; the snippet to add is printed instead. Sources live under
-`~/.local/src/canopy-stack` (`CANOPY_SRC_DIR` moves them; the Helix clone must
-stay, the runtime symlink points into it).
+What it does: installs `hx`, `forge`, and the Steel tools into `~/.cargo/bin`
+(your distro or brew `hx` stays put, just make sure `~/.cargo/bin` wins on
+PATH), links the Helix runtime, builds grammars, installs canopy and its deps,
+and writes a starter `~/.config/helix/init.scm` if you don't have one. It
+never touches an existing `init.scm`; it prints the snippet and you paste it.
+Sources go in `~/.local/src/canopy-stack` (override with `CANOPY_SRC_DIR`).
+Don't delete the Helix clone afterwards, the runtime symlink points into it.
 
-Already on Steel Helix with `forge`? Skip the script:
+Already on the Steel fork with `forge`?
 
 ```sh
 forge pkg install --git https://github.com/a-marr/canopy.hx.git
 ```
 
-and add the snippet from Configuration below to `init.scm`. Use the https
-URL: forge clones through libgit2 without credential callbacks, so ssh
-remotes and private repos fail (and forge still exits 0 when they do).
+then add the snippet from Configuration to `init.scm`. https only: forge's
+libgit2 has no credential callback, so ssh URLs and private repos fail, and
+forge exits 0 anyway.
 
-The fork tracks upstream Helix closely and is daily-driven by its users;
-`install.sh` pins the revision canopy was last tested against.
+`install.sh` pins the fork revision canopy was last tested against. The fork
+tracks upstream closely.
 
 ## Keys
 
@@ -97,27 +92,24 @@ The fork tracks upstream Helix closely and is daily-driven by its users;
 | `:` | hand focus back and open the editor command line |
 | `Esc`, `Ctrl-l`, other chords | focus editor |
 
-The look: the root row doubles as a header band (menu-shade background,
-changed-file count at the right edge, hidden when clean). Faint indent
-guides trace depth, directories carry slim chevrons, and git state
-renders as a themed dot with the filename tinted to match (diff colors
-from your theme). Clean files stay plain; changed state propagates to
-parent directories as a dot. Badges match paths against the repo root,
-so they survive root dives. Symlinks carry a dim `→ target` suffix.
-Popups (rename/new/move/delete, help, preview) share one kit: `ui.popup`
-backdrop, visible border, bold title in the top edge.
+How it looks: the root row is the header, with a changed-file count on the
+right when the repo is dirty. Faint indent guides, slim chevrons on
+directories, git status as a colored dot with the filename tinted to match
+(your theme's diff colors). Clean files stay plain. Dirty state bubbles up to
+parent dirs. Badges match against the repo root, so they survive diving into
+a subdir. Symlinks show a dim `→ target`. Every popup (rename, new, move,
+delete, help, preview) uses the same style: `ui.popup` background, visible
+border, bold title.
 
-Cursor semantics: refocusing the tree restores your last position. The
-tree only jumps to the active file when the buffer actually changed
-since the tree last saw it (`#:auto-reveal`, also covering startup and
-changes made while the panel was hidden), or on demand via `f`.
-Renaming or moving a file whose buffer is open and clean re-paths the
-buffer; a dirty buffer gets a warning instead. Expanded directories
-persist per root under `~/.local/state/canopy/`. File icons come from
-devicons.hx (nvim-tree catalog).
+Cursor: refocusing the tree puts you back where you were. It only jumps to
+the current file when the buffer changed since the tree last looked
+(`#:auto-reveal`, which also covers startup and anything that happened while
+the panel was hidden), or when you press `f`. Rename or move a file with a
+clean open buffer and the buffer follows; a dirty buffer gets a warning
+instead. Expanded dirs are remembered per root in `~/.local/state/canopy/`.
+Icons come from devicons.hx.
 
-Known-binary files are refused with a status message instead of opening as
-raw bytes.
+Binary files don't open as raw bytes; you get a message instead.
 
 ## Configuration
 
@@ -127,6 +119,7 @@ raw bytes.
 (require "helix/keymaps.scm")
 
 (canopy-start!)                       ; dock at startup, editor keeps focus
+;; or (canopy-start! #:unless-file #t): don't dock when launched on a file
 
 (canopy-configure! 'left              ; or 'right
                    #:ignore (list ".git" "target")
@@ -135,17 +128,21 @@ raw bytes.
                    #:use-trash 'auto) ; 'never deletes directly
 (canopy-set-style! 'snacks)           ; or 'mini (floating columns)
 
-;; Space-e toggles visibility; C-h/C-l move focus tree <-> buffer.
-;; backspace aliases C-h for terminals using legacy encoding.
+;; Space-e toggles the panel; C-h/C-l move focus tree <-> buffer.
+;; backspace doubles as C-h for terminals that still send Ctrl+h as 0x08.
 (keymap (global)
         (normal (space (e ":canopy-toggle"))
                 (C-h ":canopy-focus")
                 (backspace ":canopy-focus")))
 ```
 
-Commands: `:canopy-open` (focus, opening if needed, Esc-toggle style),
-`:canopy-focus` (focus, no-op if already focused), `:canopy-toggle`
-(visibility only), `:canopy-close`, plus `(canopy-start!)` for init.scm.
+Commands:
+
+- `:canopy-open` focuses the tree, opening it if needed
+- `:canopy-focus` same, but a no-op if it already has focus
+- `:canopy-toggle` shows or hides the panel, nothing else
+- `:canopy-close`
+- `(canopy-start!)` is for init.scm
 
 ## License
 
