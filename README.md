@@ -92,15 +92,6 @@ tracks upstream closely.
 | `:` | hand focus back and open the editor command line |
 | `Esc`, `Ctrl-l`, other chords | focus editor |
 
-How it looks: the root row is the header, with a changed-file count on the
-right when the repo is dirty. Faint indent guides, slim chevrons on
-directories, git status as a colored dot with the filename tinted to match
-(your theme's diff colors). Clean files stay plain. Dirty state bubbles up to
-parent dirs. Badges match against the repo root, so they survive diving into
-a subdir. Symlinks show a dim `→ target`. Every popup (rename, new, move,
-delete, help, preview) uses the same style: `ui.popup` background, visible
-border, bold title.
-
 Cursor: refocusing the tree puts you back where you were. It only jumps to
 the current file when the buffer changed since the tree last looked
 (`#:auto-reveal`, which also covers startup and anything that happened while
