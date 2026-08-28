@@ -2260,13 +2260,22 @@
           (pop-last-component-by-name! "picker")
           (file_picker))))))
 
+;; #t when the focused buffer is backed by a file, i.e. hx was launched on
+;; one; hx . and a bare hx leave a pathless scratch buffer
+(define (canopy-focused-buffer-has-file?)
+  (with-handler (lambda (_) #f)
+    (string? (editor-document->path (editor->doc-id (editor-focus))))))
+
 ;;@doc
 ;; Dock the tree at startup without taking focus; the editor keeps input and
 ;; canopy-open (e.g. Space-e) focuses the panel. Call from init.scm.
-(define (canopy-start!)
+;; #:unless-file #t skips the dock when hx was opened on a file (hx foo.py),
+;; still docking for hx . or a bare hx; Space-e opens it on demand either way.
+(define (canopy-start! #:unless-file [unless-file #f])
   (enqueue-thread-local-callback
    (lambda ()
-     (unless *canopy-active*
+     (unless (or *canopy-active*
+                 (and unless-file (canopy-focused-buffer-has-file?)))
        (set! *canopy-active* #t)
        (set! *canopy-focused* #f)
        (set! *canopy-query* "")
