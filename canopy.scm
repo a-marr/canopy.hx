@@ -32,7 +32,7 @@
 (define (canopy-error msg)
   (notify msg #:severity 'error #:title "canopy.hx"))
 
-(define *canopy-width* 32) ;
+(define *canopy-width* 32)
 (define *canopy-min-width* 16)
 (define *canopy-max-width* 60)
 (define *canopy-search-height* 3)
@@ -75,7 +75,7 @@
 
 (define *canopy-git-status-map* (hash))
 
-;; classifies code it modifiles added deleted and renames
+;; classifies a porcelain code as untracked, added, deleted, renamed, or modified
 (define (canopy-git-status-symbol code)
   (define x (string-ref code 0))
   (define y (string-ref code 1))
@@ -209,7 +209,7 @@
 (provide canopy-snacks-width)
 
 ;;@doc
-;; true while the snacks sidebar is open, so plugins wont go over sidebar
+;; true while the snacks sidebar is open, so other plugins can keep off it
 (define (canopy-snacks-active?)
   (and *canopy-active* (equal? *canopy-style* 'snacks)))
 
@@ -290,21 +290,12 @@
       (or *canopy-search-color-focused* (canopy-hex->color *canopy-search-default-focused*))
       (or *canopy-search-color-unfocused* (canopy-hex->color *canopy-search-default-unfocused*))))
 
-;; keep the panel off the rows moka and scopeline reserve
-(define *canopy-reserved-top-fn* 'unresolved)
+;; keep the panel off the rows moka reserves at the bottom
 (define *canopy-reserved-bottom-fn* 'unresolved)
 
 (define (canopy-resolve-reserved!)
-  (when (equal? *canopy-reserved-top-fn* 'unresolved)
-    (set! *canopy-reserved-top-fn* (with-handler (lambda (_) #f) (eval 'moka-reserved-top)))
+  (when (equal? *canopy-reserved-bottom-fn* 'unresolved)
     (set! *canopy-reserved-bottom-fn* (with-handler (lambda (_) #f) (eval 'moka-reserved-bottom)))))
-
-(define (canopy-reserved-top)
-  (canopy-resolve-reserved!)
-  (+ (if *canopy-reserved-top-fn* (with-handler (lambda (_) 0) (*canopy-reserved-top-fn*)) 0)
-     (with-handler (lambda (_) 0)
-       (let ([v (eval-string "(scopeline-reserved-top)")])
-         (if (number? v) v 0)))))
 
 (define (canopy-reserved-bottom)
   (canopy-resolve-reserved!)
@@ -354,7 +345,7 @@
     [(and (string? k) (not (equal? k ""))) k]
     [else "?"]))
 
-;; snaks keybinds
+;; snacks keybinds
 (define (canopy-snacks-help-rows)
   (list
     (list (string-append (canopy-help-key 'down) " / " (canopy-help-key 'up) " / ↑ / ↓") "Move through the tree")
@@ -406,7 +397,7 @@
   (define w (min (max 0 (- (area-width rect) 2)) (+ content-w 4)))
   ;; two borders around one row per binding
   (define h (min (max 0 (- (area-height rect) 2)) (+ (length rows) 2)))
-  ;; placed above the statusline plus any reserved line e.g for moka
+  ;; placed above the statusline plus any reserved line, e.g. for moka
   (define bottom (+ (canopy-reserved-bottom) 2))
   (define x (max 0 (- (area-width rect) w)))
   (define y (max 0 (- (area-height rect) h bottom)))
@@ -448,7 +439,7 @@
       (frame-set-string! frame dx ry (canopy-truncate (cadr r) avail) text-style)
       (loop (cdr rs) (+ row 1)))))
 
-;; pressing a listed key runs that action and closes and esc or space
+;; pressing a listed key runs that action and closes; esc or any unbound key
 ;; closes without running anything
 (define (canopy-help-handle-event state event)
   (define ch (key-event-char event))
@@ -523,7 +514,7 @@
 
 (define (canopy-searching?) (not (equal? *canopy-query* "")))
 
-;; dirs before files, alphabetic oder
+;; dirs before files, alphabetic order
 (define (canopy-sort-entries lst)
   (define dirs (sort (filter is-dir? lst) string<?))
   (define files (sort (filter (lambda (p) (not (is-dir? p))) lst) string<?))
@@ -610,7 +601,7 @@
   (let loop ([n n] [h 0])
     (if (< n 2) h (loop (- n 2) (+ h 1)))))
 
-;; marks every old dir between the workspace root and path as open
+;; expands every dir between the workspace root and path
 (define (canopy-open-ancestors-for-file! path)
   (define ws (canopy-root))
   (define ws-prefix (string-append ws (path-separator)))
@@ -649,7 +640,7 @@
       (canopy-enter-dir! (car entry)))))
 
 ;; flat recursive file list for search
-;; searches files indepedent of the fold state
+;; searches files independent of the fold state
 (define (canopy-scan-files!)
   (define root (canopy-root))
   (define root-prefix (string-append root (path-separator)))
@@ -771,7 +762,7 @@
 (define *canopy-presearch-cursor* 0)
 (define *canopy-presearch-window* 0)
 
-;; / starts a new query  and letters stay free for single-key commands
+;; / starts a new query, so letters stay free for single-key commands
 (define (canopy-enter-search!)
   ;; remember where browsing left off, so escape can put the tree back
   (unless (canopy-searching?)
@@ -797,7 +788,7 @@
   (set! *canopy-cursor* 0)
   (set! *canopy-window-start* 0))
 
-;; refreshes the view after an eaction like deletion
+;; refreshes the view after an action like deletion
 (define (canopy-refresh-all!)
   (define old *canopy-cursor*)
   (canopy-scan-git-ignored! (canopy-root)) ; badges refresh with the tree
@@ -809,7 +800,7 @@
 
 (define *canopy-refresh-mini-fn* #f)
 
-;; refreshes whichever style is active immediatelly
+;; refreshes whichever style is active
 (define (canopy-refresh-current-style!)
   (if (and (equal? *canopy-style* 'mini) *canopy-refresh-mini-fn*)
       (*canopy-refresh-mini-fn*)
@@ -1064,7 +1055,7 @@
                    (hash "handle_event" canopy-modal-handle-event
                          "cursor" canopy-modal-cursor-fn))))
 
-;; shells out to mv mkdir since steel has no rename builtin
+;; shell helpers: steel has no rename/copy builtins, so file ops shell out
 (define (canopy-string-join parts sep)
   (if (null? parts)
       ""
@@ -1432,7 +1423,7 @@
 ;; the cursor won't do: it can already be sitting on the row the first click hits
 (define *canopy-click-slot* #f)
 
-;; results and mini columns centre on the selection as they render, sliding the
+;; results and mini columns center on the selection as they render, sliding the
 ;; clicked row out from under the pointer, so the window is held while it stays armed
 (define *canopy-click-window* #f)      ; snacks search: first row of the window
 (define *canopy-mini-click-window* #f) ; mini: (column window-start)
@@ -1557,7 +1548,7 @@
   ;; entries stay flush left and fill up to one gap column before it
   (define left-divider? (and *canopy-show-separator?* (not (equal? *canopy-side* 'right))))
   (define list-w (if left-divider? (- w 2) w))
-  ;; the search box is centred between the left edge and the divider
+  ;; the search box is centered between the left edge and the divider
   (define box-x (if left-divider? (+ x0 1) x0))
   (define box-w (if left-divider? (- w 3) w))
 
@@ -1958,8 +1949,8 @@
         (canopy-info (string-append "copied path " (car entry)))))))
 
 ;; ---- tree root -------------------------------------------------------------
-;; the tree normally follows the helix workspace; C-] dives into a subdir as
-;; the new root and C-[ climbs back out
+;; the tree normally follows the helix workspace; > dives into a subdir as
+;; the new root and < climbs back out
 (define *canopy-root-override* #f)
 
 (define (canopy-root)
@@ -2348,7 +2339,7 @@
   (set! *canopy-active* #f)
   (pop-last-component-by-name! "canopy-mini"))
 
-;; enters a directory cascades a new column to the side or opens a file
+;; entering a directory cascades a new column to the side; a file just opens
 (define (canopy-mini-enter!)
   (define entry (canopy-mini-current-entry))
   (cond
@@ -2370,7 +2361,7 @@
   (when (> (length *canopy-mini-stack*) 1)
     (set! *canopy-mini-stack* (canopy-mini-drop-last *canopy-mini-stack*))))
 
-;; rebuilds the active column in place after a create/rename/delete
+;; rebuilds the active column in place after a create/rename/delete,
 ;; keeping the cursor in bounds
 (define (canopy-mini-refresh-active!)
   (define col (canopy-mini-active-column))
@@ -2380,7 +2371,7 @@
         (append (canopy-mini-drop-last *canopy-mini-stack*)
                 (list (CanopyMiniColumn (CanopyMiniColumn-path col) new-entries (box new-cursor))))))
 
-;; refesh after toggle
+;; refresh after a visibility toggle
 (define (canopy-mini-refresh-all!)
   (set! *canopy-mini-stack*
         (map (lambda (col)
@@ -2440,7 +2431,7 @@
   (walk root)
   (sort (map (lambda (p) (substring p (string-length prefix) (string-length p))) acc) string<?))
 
-;; panels grow and shrink with their own content with safe bound clamping
+;; panels grow and shrink with their own content, clamped to safe bounds
 (define (canopy-mini-longest-name entries)
   (let loop ([lst entries] [best 0])
     (if (null? lst) best (loop (cdr lst) (max best (string-length (cdr (car lst))))))))
@@ -2626,7 +2617,7 @@
       (frame-set-string! frame x (+ y0 row) (canopy-truncate (car items) w) style)
       (iloop (cdr items) (+ row 1)))))
 
-;; recorded while rendering: which ancestors survived fit isn't visible to the handler
+;; recorded while rendering: which ancestors survived the fit isn't visible to the handler
 (define *canopy-mini-hit-panels* '()) ; one area per panel drawn, borders included
 (define *canopy-mini-hit-cols* '())   ; (area column window-start) per column
 (define *canopy-mini-hit-preview* #f) ; (area entry-count) when the preview lists a directory

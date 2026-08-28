@@ -7,9 +7,12 @@ Forked from [forest.hx](https://github.com/Ra77a3l3-jar/forest.hx) (MIT) and
 reshaped: full vim navigation, filter-search that reshapes the tree, file
 operations that follow open buffers, git awareness, full mouse support.
 
-Status: v0 in active development. See SPEC in the parent project.
+Requires mattwparas' Steel-enabled Helix fork (branch `steel-event-system`).
+It does not run on stock Helix, which has no plugin runtime.
 
-## Keys (v0)
+Status: feature-complete for daily use; the API may still shift.
+
+## Keys
 
 | Key | Action |
 |-----|--------|
@@ -25,7 +28,7 @@ Status: v0 in active development. See SPEC in the parent project.
 | `P` | toggle file preview popup |
 | `Space f` / `Space e` | file picker / toggle panel (mini-leader) |
 | `?` or `Space Space` | help popup |
-| `n` / `N` | new file / new directory |
+| `n` | new file, or new directory when the name ends in `/` |
 | `r` / `m` | rename / move |
 | `y` / `p` | yank entry / paste a copy |
 | `Y` | copy absolute path to clipboard |
@@ -34,6 +37,8 @@ Status: v0 in active development. See SPEC in the parent project.
 | `.` / `i` | toggle dotfiles / git-ignored |
 | `R` | refresh |
 | `+` / `-` | resize |
+| `q` | close the panel |
+| `:` | hand focus back and open the editor command line |
 | `Esc`, `Ctrl-l`, other chords | focus editor |
 
 The look: the root row doubles as a header band (menu-shade background,
